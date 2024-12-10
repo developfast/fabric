@@ -9,16 +9,15 @@ package multichannel
 import (
 	"testing"
 
-	"github.com/golang/protobuf/proto"
-	cb "github.com/hyperledger/fabric-protos-go/common"
-	"github.com/hyperledger/fabric-protos-go/orderer"
-	"github.com/hyperledger/fabric/bccsp"
-	"github.com/hyperledger/fabric/bccsp/sw"
+	"github.com/hyperledger/fabric-lib-go/bccsp"
+	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
+	"github.com/hyperledger/fabric-lib-go/common/metrics/disabled"
+	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
+	"github.com/hyperledger/fabric-protos-go-apiv2/orderer"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/configtx"
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
 	"github.com/hyperledger/fabric/common/ledger/blockledger/fileledger"
-	"github.com/hyperledger/fabric/common/metrics/disabled"
 	"github.com/hyperledger/fabric/core/config/configtest"
 	"github.com/hyperledger/fabric/internal/configtxgen/encoder"
 	"github.com/hyperledger/fabric/internal/configtxgen/genesisconfig"
@@ -27,6 +26,7 @@ import (
 	"github.com/hyperledger/fabric/orderer/common/multichannel/mocks"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 //go:generate counterfeiter -o mocks/configtx_validator.go --fake-name ConfigTXValidator . configtxValidator
@@ -62,8 +62,14 @@ func TestCreateBlock(t *testing.T) {
 		{Payload: []byte("some other bytes")},
 	})
 
+	dataHash := protoutil.ComputeBlockDataHash(block.Data)
+	protoutil.BlockHeaderHash(&cb.BlockHeader{
+		Number:       block.Header.Number,
+		DataHash:     dataHash[:],
+		PreviousHash: protoutil.BlockHeaderHash(seedBlock.Header),
+	})
 	require.Equal(t, seedBlock.Header.Number+1, block.Header.Number)
-	require.Equal(t, protoutil.BlockDataHash(block.Data), block.Header.DataHash)
+	require.Equal(t, dataHash[:], block.Header.DataHash)
 	require.Equal(t, protoutil.BlockHeaderHash(seedBlock.Header), block.Header.PreviousHash)
 }
 

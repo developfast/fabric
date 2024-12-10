@@ -8,21 +8,21 @@ package channelparticipation
 
 import (
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"path"
 	"strings"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/gorilla/mux"
-	cb "github.com/hyperledger/fabric-protos-go/common"
+	"github.com/hyperledger/fabric-lib-go/common/flogging"
+	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/common/configtx"
-	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/orderer/common/localconfig"
 	"github.com/hyperledger/fabric/orderer/common/types"
 	"github.com/pkg/errors"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -300,7 +300,7 @@ func (h *HTTPHandler) multipartFormDataBodyToBlock(params map[string]string, req
 		return nil
 	}
 
-	blockBytes, err := ioutil.ReadAll(file)
+	blockBytes, err := io.ReadAll(file)
 	if err != nil {
 		h.sendResponseJsonError(resp, http.StatusBadRequest, errors.Wrapf(err, "cannot read file part %s from request body", FormDataConfigBlockKey))
 		return nil

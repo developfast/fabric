@@ -11,32 +11,29 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/golang/protobuf/proto"
-	"github.com/hyperledger/fabric-protos-go/common"
-	"github.com/hyperledger/fabric-protos-go/peer"
+	"github.com/hyperledger/fabric-protos-go-apiv2/common"
+	"github.com/hyperledger/fabric-protos-go-apiv2/peer"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
 	"github.com/hyperledger/fabric/protoutil"
+	"google.golang.org/protobuf/proto"
 )
 
 // ExtractSignedCCDepSpec extracts the messages from the envelope
 func ExtractSignedCCDepSpec(env *common.Envelope) (*common.ChannelHeader, *peer.SignedChaincodeDeploymentSpec, error) {
 	p := &common.Payload{}
-	err := proto.Unmarshal(env.Payload, p)
-	if err != nil {
+	if err := proto.Unmarshal(env.Payload, p); err != nil {
 		return nil, nil, err
 	}
 	if p.Header == nil {
 		return nil, nil, errors.New("channel header cannot be nil")
 	}
 	ch := &common.ChannelHeader{}
-	err = proto.Unmarshal(p.Header.ChannelHeader, ch)
-	if err != nil {
+	if err := proto.Unmarshal(p.Header.ChannelHeader, ch); err != nil {
 		return nil, nil, err
 	}
 
 	sp := &peer.SignedChaincodeDeploymentSpec{}
-	err = proto.Unmarshal(p.Data, sp)
-	if err != nil {
+	if err := proto.Unmarshal(p.Data, sp); err != nil {
 		return nil, nil, err
 	}
 
@@ -92,7 +89,7 @@ func createSignedCCDepSpec(cdsbytes []byte, instpolicybytes []byte, endorsements
 	// create SignedChaincodeDeploymentSpec...
 	cip := &peer.SignedChaincodeDeploymentSpec{ChaincodeDeploymentSpec: cdsbytes, InstantiationPolicy: instpolicybytes, OwnerEndorsements: endorsements}
 
-	//...and marshal it
+	// ...and marshal it
 	cipbytes := protoutil.MarshalOrPanic(cip)
 
 	// use defaults (this is definitely ok for install package)

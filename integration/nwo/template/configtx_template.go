@@ -141,9 +141,6 @@ Profiles:{{ range .Profiles }}
     {{- if .Orderers }}
     Orderer:
       OrdererType: {{ $w.Consensus.Type }}
-      Addresses:{{ range .Orderers }}{{ with $w.Orderer . }}
-      - 127.0.0.1:{{ $w.OrdererPort . "Listen" }}
-      {{- end }}{{ end }}
       {{- if .Blocks}}
       BatchTimeout: {{ .Blocks.BatchTimeout }}s
       BatchSize:
@@ -160,6 +157,24 @@ Profiles:{{ range .Profiles }}
       Capabilities:
         V2_0: true
       {{- if eq $w.Consensus.Type "BFT" }}
+      {{- if .SmartBFT}}
+      SmartBFT:
+        RequestBatchMaxCount:      100
+        RequestBatchMaxBytes:      10485760
+        RequestBatchMaxInterval:   50ms
+        IncomingMessageBufferSize: 200
+        RequestPoolSize:           400
+        RequestForwardTimeout:     2s
+        RequestComplainTimeout:    20s
+        RequestAutoRemoveTimeout:  3m
+        ViewChangeResendInterval:  5s
+        ViewChangeTimeout:         20s
+        LeaderHeartbeatTimeout:    {{ .SmartBFT.LeaderHeartbeatTimeout }}s
+        LeaderHeartbeatCount:      {{ .SmartBFT.LeaderHeartbeatCount }}
+        CollectTimeout:            1s
+        SyncOnStart:               false
+        SpeedUpViewChange:         false
+      {{- end }}
       ConsenterMapping:{{ range $index, $orderer := .Orderers }}{{ with $w.Orderer . }}
       - ID: {{ .Id }}
         Host: 127.0.0.1

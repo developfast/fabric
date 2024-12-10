@@ -7,29 +7,29 @@ SPDX-License-Identifier: Apache-2.0
 package raft
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
-	"github.com/hyperledger/fabric/integration/channelparticipation"
-
 	docker "github.com/fsouza/go-dockerclient"
-	"github.com/golang/protobuf/proto"
 	conftx "github.com/hyperledger/fabric-config/configtx"
-	"github.com/hyperledger/fabric-protos-go/common"
-	"github.com/hyperledger/fabric-protos-go/msp"
-	"github.com/hyperledger/fabric-protos-go/orderer/etcdraft"
+	"github.com/hyperledger/fabric-protos-go-apiv2/common"
+	"github.com/hyperledger/fabric-protos-go-apiv2/msp"
+	orderer2 "github.com/hyperledger/fabric-protos-go-apiv2/orderer"
+	"github.com/hyperledger/fabric-protos-go-apiv2/orderer/etcdraft"
 	"github.com/hyperledger/fabric/common/configtx"
 	"github.com/hyperledger/fabric/common/util"
+	"github.com/hyperledger/fabric/integration/channelparticipation"
 	"github.com/hyperledger/fabric/integration/nwo"
 	"github.com/hyperledger/fabric/integration/nwo/commands"
 	"github.com/hyperledger/fabric/integration/ordererclient"
@@ -41,6 +41,7 @@ import (
 	"github.com/tedsuo/ifrit"
 	ginkgomon "github.com/tedsuo/ifrit/ginkgomon_v2"
 	"github.com/tedsuo/ifrit/grouper"
+	"google.golang.org/protobuf/proto"
 )
 
 var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
@@ -56,7 +57,7 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 
 	BeforeEach(func() {
 		var err error
-		testDir, err = ioutil.TempDir("", "e2e")
+		testDir, err = os.MkdirTemp("", "e2e")
 		Expect(err).NotTo(HaveOccurred())
 
 		client, err = docker.NewClientFromEnv()
@@ -142,6 +143,63 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 		})
 	})
 
+	When("orderer is configured with throttling", func() {
+		It("a hyperactive client cannot overwhelm the orderer", func() {
+			network = nwo.New(nwo.BasicEtcdRaft(), testDir, client, StartPort(), components)
+
+			network.GenerateConfigTree()
+			network.Bootstrap()
+
+			orderer := network.Orderer("orderer")
+
+			oRunner := network.OrdererRunner(orderer)
+
+			ordererProc = ifrit.Invoke(oRunner)
+			Eventually(ordererProc.Ready(), network.EventuallyTimeout).Should(BeClosed())
+
+			channelparticipation.JoinOrderersAppChannelCluster(network, "testchannel", orderer)
+
+			envs := make(chan *common.Envelope, 5000)
+
+			// Create 5000 envelopes to send to the orderer at the same time
+			for i := 0; i < 5000; i++ {
+				envs <- ordererclient.CreateBroadcastEnvelope(network, orderer, "testchannel", []byte(fmt.Sprintf("%d", i)))
+			}
+
+			close(envs)
+
+			// Broadcast all envelopes in parallel from 50 clients
+			By("Send envs for TPS1")
+			Eventually(oRunner.Err, time.Minute).Should(gbytes.Say("Start accepting requests as Raft leader"))
+			TPS := measureTPS(5000, network, orderer, envs)
+			Expect(TPS).To(BeNumerically(">", 500))
+
+			// Next, restart the orderer with throttling enabled
+			ordererProc.Signal(syscall.SIGTERM)
+			Eventually(ordererProc.Wait(), network.EventuallyTimeout).Should(Receive())
+
+			oRunner = network.OrdererRunner(orderer, "ORDERER_GENERAL_THROTTLING_RATE=500")
+			ordererProc = ifrit.Invoke(oRunner)
+
+			// Re-create the envelopes
+			envs = make(chan *common.Envelope, 5000)
+
+			// Create 5000 envelopes to send to the orderer at the same time
+			for i := 0; i < 5000; i++ {
+				envs <- ordererclient.CreateBroadcastEnvelope(network, orderer, "testchannel", []byte(fmt.Sprintf("%d", i)))
+			}
+
+			close(envs)
+
+			// Broadcast all envelopes in parallel from 50 clients and ensure it's not as fast as earlier
+			By("Send envs for TPS2")
+			Eventually(oRunner.Err, time.Minute).Should(gbytes.Say("Start accepting requests as Raft leader"))
+			TPS = measureTPS(5000, network, orderer, envs)
+			Expect(TPS).To(BeNumerically(">", 440))
+			Expect(TPS).To(BeNumerically("<", 560))
+		})
+	})
+
 	When("an orderer is behind the latest snapshot on leader", func() {
 		It("catches up using the block stored in snapshot", func() {
 			// Steps:
@@ -183,7 +241,7 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 				// guaranteed that every block triggers a snapshot file being created,
 				// due to the mechanism to prevent excessive snapshotting.
 				Eventually(func() int {
-					files, err := ioutil.ReadDir(path.Join(o2SnapDir, channelID))
+					files, err := os.ReadDir(path.Join(o2SnapDir, channelID))
 					Expect(err).NotTo(HaveOccurred())
 					return len(files)
 				}, network.EventuallyTimeout).Should(Equal(i)) // snapshot interval is 1 KB, every block triggers snapshot
@@ -208,14 +266,14 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 
 			By("Asserting that orderer1 has snapshot dir for application channel")
 			Eventually(func() int {
-				files, err := ioutil.ReadDir(o1SnapDir)
+				files, err := os.ReadDir(o1SnapDir)
 				Expect(err).NotTo(HaveOccurred())
 				return len(files)
 			}, network.EventuallyTimeout).Should(Equal(1))
 
 			By("Asserting that orderer1 receives and persists snapshot")
 			Eventually(func() int {
-				files, err := ioutil.ReadDir(path.Join(o1SnapDir, channelID))
+				files, err := os.ReadDir(path.Join(o1SnapDir, channelID))
 				Expect(err).NotTo(HaveOccurred())
 				return len(files)
 			}, network.EventuallyTimeout).Should(Equal(1))
@@ -286,11 +344,11 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 			extendNetwork(network)
 
 			ordererCertificatePath := filepath.Join(network.OrdererLocalTLSDir(o4), "server.crt")
-			ordererCert, err := ioutil.ReadFile(ordererCertificatePath)
+			ordererCert, err := os.ReadFile(ordererCertificatePath)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Adding new ordering service node")
-			addConsenter(network, peer, orderers[0], "testchannel", etcdraft.Consenter{
+			addConsenter(network, peer, orderers[0], "testchannel", &etcdraft.Consenter{
 				ServerTlsCert: ordererCert,
 				ClientTlsCert: ordererCert,
 				Host:          "127.0.0.1",
@@ -319,7 +377,7 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 			By("Pick ordering service node to be evicted")
 			victimIdx := FindLeader(ordererRunners) - 1
 			victim := orderers[victimIdx]
-			victimCertBytes, err := ioutil.ReadFile(filepath.Join(network.OrdererLocalTLSDir(victim), "server.crt"))
+			victimCertBytes, err := os.ReadFile(filepath.Join(network.OrdererLocalTLSDir(victim), "server.crt"))
 			Expect(err).NotTo(HaveOccurred())
 
 			assertBlockReception(map[string]int{
@@ -380,7 +438,7 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 
 			By("Clean snapshot folder of lagging behind node")
 			snapDir := path.Join(network.RootDir, "orderers", remainedOrderers[0].ID(), "etcdraft", "snapshot")
-			snapshots, err := ioutil.ReadDir(snapDir)
+			snapshots, err := os.ReadDir(snapDir)
 			Expect(err).NotTo(HaveOccurred())
 
 			for _, snap := range snapshots {
@@ -404,7 +462,7 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 
 			By("Asserting that orderer1 receives and persists snapshot")
 			Eventually(func() int {
-				files, err := ioutil.ReadDir(path.Join(snapDir, "testchannel"))
+				files, err := os.ReadDir(path.Join(snapDir, "testchannel"))
 				Expect(err).NotTo(HaveOccurred())
 				return len(files)
 			}, network.EventuallyTimeout).Should(BeNumerically(">", 0))
@@ -572,28 +630,28 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 			ordererTLSCAKeyPath := filepath.Join(network.RootDir, "crypto", "ordererOrganizations",
 				ordererDomain, "tlsca", "priv_sk")
 
-			ordererTLSCAKey, err := ioutil.ReadFile(ordererTLSCAKeyPath)
+			ordererTLSCAKey, err := os.ReadFile(ordererTLSCAKeyPath)
 			Expect(err).NotTo(HaveOccurred())
 
 			ordererTLSCACertPath := filepath.Join(network.RootDir, "crypto", "ordererOrganizations",
 				ordererDomain, "tlsca", fmt.Sprintf("tlsca.%s-cert.pem", ordererDomain))
-			ordererTLSCACert, err := ioutil.ReadFile(ordererTLSCACertPath)
+			ordererTLSCACert, err := os.ReadFile(ordererTLSCACertPath)
 			Expect(err).NotTo(HaveOccurred())
 
 			serverTLSCerts := make(map[string][]byte)
 			for _, orderer := range []*nwo.Orderer{o1, o2, o3} {
 				tlsCertPath := filepath.Join(network.OrdererLocalTLSDir(orderer), "server.crt")
-				serverTLSCerts[tlsCertPath], err = ioutil.ReadFile(tlsCertPath)
+				serverTLSCerts[tlsCertPath], err = os.ReadFile(tlsCertPath)
 				Expect(err).NotTo(HaveOccurred())
 			}
 
 			By("Expiring orderer TLS certificates")
 			for filePath, certPEM := range serverTLSCerts {
 				expiredCert, earlyMadeCACert := expireCertificate(certPEM, ordererTLSCACert, ordererTLSCAKey, time.Now())
-				err = ioutil.WriteFile(filePath, expiredCert, 0o600)
+				err = os.WriteFile(filePath, expiredCert, 0o600)
 				Expect(err).NotTo(HaveOccurred())
 
-				err = ioutil.WriteFile(ordererTLSCACertPath, earlyMadeCACert, 0o600)
+				err = os.WriteFile(ordererTLSCACertPath, earlyMadeCACert, 0o600)
 				Expect(err).NotTo(HaveOccurred())
 			}
 
@@ -904,32 +962,32 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 			ordererDomain := network.Organization(orderer.Organization).Domain
 			ordererCAKeyPath := filepath.Join(network.RootDir, "crypto", "ordererOrganizations", ordererDomain, "ca", "priv_sk")
 
-			ordererCAKey, err := ioutil.ReadFile(ordererCAKeyPath)
+			ordererCAKey, err := os.ReadFile(ordererCAKeyPath)
 			Expect(err).NotTo(HaveOccurred())
 
 			ordererCACertPath := network.OrdererCACert(orderer)
-			ordererCACert, err := ioutil.ReadFile(ordererCACertPath)
+			ordererCACert, err := os.ReadFile(ordererCACertPath)
 			Expect(err).NotTo(HaveOccurred())
 
 			adminCertPath := network.OrdererUserCert(orderer, "Admin")
 
-			originalAdminCert, err := ioutil.ReadFile(adminCertPath)
+			originalAdminCert, err := os.ReadFile(adminCertPath)
 			Expect(err).NotTo(HaveOccurred())
 
 			expiredAdminCert, earlyCACert := expireCertificate(originalAdminCert, ordererCACert, ordererCAKey, time.Now())
-			err = ioutil.WriteFile(adminCertPath, expiredAdminCert, 0o600)
+			err = os.WriteFile(adminCertPath, expiredAdminCert, 0o600)
 			Expect(err).NotTo(HaveOccurred())
 
 			adminPath := filepath.Join(network.RootDir, "crypto", "ordererOrganizations",
 				ordererDomain, "msp", "admincerts", fmt.Sprintf("Admin@%s-cert.pem", ordererDomain))
-			err = ioutil.WriteFile(adminPath, expiredAdminCert, 0o600)
+			err = os.WriteFile(adminPath, expiredAdminCert, 0o600)
 			Expect(err).NotTo(HaveOccurred())
 
-			err = ioutil.WriteFile(ordererCACertPath, earlyCACert, 0o600)
+			err = os.WriteFile(ordererCACertPath, earlyCACert, 0o600)
 			Expect(err).NotTo(HaveOccurred())
 
 			ordererCACertPath = network.OrdererCACert(orderer)
-			err = ioutil.WriteFile(ordererCACertPath, earlyCACert, 0o600)
+			err = os.WriteFile(ordererCACertPath, earlyCACert, 0o600)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Regenerating config")
@@ -951,20 +1009,20 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 
 			By("Creating config update that adds another orderer admin")
 			bootBlockPath := filepath.Join(network.RootDir, fmt.Sprintf("%s_block.pb", "testchannel"))
-			bootBlock, err := ioutil.ReadFile(bootBlockPath)
+			bootBlock, err := os.ReadFile(bootBlockPath)
 			Expect(err).NotTo(HaveOccurred())
 
 			current := configFromBootstrapBlock(bootBlock)
 			updatedConfig := addAdminCertToConfig(current, originalAdminCert)
 
-			tempDir, err := ioutil.TempDir("", "adminExpirationTest")
+			tempDir, err := os.MkdirTemp("", "adminExpirationTest")
 			Expect(err).NotTo(HaveOccurred())
 
 			configBlockFile := filepath.Join(tempDir, "update.pb")
 			defer os.RemoveAll(tempDir)
 			nwo.ComputeUpdateOrdererConfig(configBlockFile, network, "testchannel", current, updatedConfig, peer)
 
-			updateTransaction, err := ioutil.ReadFile(configBlockFile)
+			updateTransaction, err := os.ReadFile(configBlockFile)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Creating config update")
@@ -1007,7 +1065,7 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 			Expect(block).NotTo(BeNil())
 
 			By("Restore the original admin cert")
-			err = ioutil.WriteFile(adminCertPath, originalAdminCert, 0o600)
+			err = os.WriteFile(adminCertPath, originalAdminCert, 0o600)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Ensure we can fetch the block using our original un-expired admin cert")
@@ -1019,6 +1077,66 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 	})
 })
 
+func measureTPS(txNum int, network *nwo.Network, orderer *nwo.Orderer, envs chan *common.Envelope) int {
+	var bcastWG sync.WaitGroup
+	bcastWG.Add(50)
+
+	var lock sync.Mutex
+	cond := sync.NewCond(&lock)
+
+	var wg sync.WaitGroup
+	wg.Add(50)
+
+	for i := 0; i < 50; i++ {
+		go func() {
+			defer bcastWG.Done()
+			conn := network.NewClientConn(
+				network.OrdererAddress(orderer, nwo.ListenPort),
+				filepath.Join(network.OrdererLocalTLSDir(orderer), "ca.crt"),
+				filepath.Join(network.OrdererLocalTLSDir(orderer), "server.crt"),
+				filepath.Join(network.OrdererLocalTLSDir(orderer), "server.key"),
+			)
+
+			broadcaster, err := orderer2.NewAtomicBroadcastClient(conn).Broadcast(context.Background())
+			if err != nil {
+				panic(err)
+			}
+
+			wg.Done()
+
+			lock.Lock()
+			cond.Wait()
+			lock.Unlock()
+
+			for len(envs) > 0 {
+				env, ok := <-envs
+				if ok {
+					err := broadcaster.Send(env)
+					if err != nil {
+						panic(err)
+					}
+					_, err = broadcaster.Recv()
+					if err != nil {
+						panic(err)
+					}
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+	start := time.Now()
+	cond.Broadcast()
+	bcastWG.Wait()
+
+	elapsed := time.Since(start)
+	if elapsed < time.Second {
+		elapsed = time.Second
+	}
+
+	return txNum / int(elapsed.Seconds())
+}
+
 func renewOrdererCertificates(network *nwo.Network, orderers ...*nwo.Orderer) {
 	if len(orderers) == 0 {
 		return
@@ -1027,24 +1145,24 @@ func renewOrdererCertificates(network *nwo.Network, orderers ...*nwo.Orderer) {
 	ordererTLSCAKeyPath := filepath.Join(network.RootDir, "crypto", "ordererOrganizations",
 		ordererDomain, "tlsca", "priv_sk")
 
-	ordererTLSCAKey, err := ioutil.ReadFile(ordererTLSCAKeyPath)
+	ordererTLSCAKey, err := os.ReadFile(ordererTLSCAKeyPath)
 	Expect(err).NotTo(HaveOccurred())
 
 	ordererTLSCACertPath := filepath.Join(network.RootDir, "crypto", "ordererOrganizations",
 		ordererDomain, "tlsca", fmt.Sprintf("tlsca.%s-cert.pem", ordererDomain))
-	ordererTLSCACert, err := ioutil.ReadFile(ordererTLSCACertPath)
+	ordererTLSCACert, err := os.ReadFile(ordererTLSCACertPath)
 	Expect(err).NotTo(HaveOccurred())
 
 	serverTLSCerts := map[string][]byte{}
 	for _, orderer := range orderers {
 		tlsCertPath := filepath.Join(network.OrdererLocalTLSDir(orderer), "server.crt")
-		serverTLSCerts[tlsCertPath], err = ioutil.ReadFile(tlsCertPath)
+		serverTLSCerts[tlsCertPath], err = os.ReadFile(tlsCertPath)
 		Expect(err).NotTo(HaveOccurred())
 	}
 
 	for filePath, certPEM := range serverTLSCerts {
 		renewedCert, _ := expireCertificate(certPEM, ordererTLSCACert, ordererTLSCAKey, time.Now().Add(time.Hour))
-		err = ioutil.WriteFile(filePath, renewedCert, 0o600)
+		err = os.WriteFile(filePath, renewedCert, 0o600)
 		Expect(err).NotTo(HaveOccurred())
 	}
 }
@@ -1160,7 +1278,7 @@ func configFromBlock(block *common.Block) *common.Config {
 }
 
 func fetchConfig(n *nwo.Network, peer *nwo.Peer, orderer *nwo.Orderer, port nwo.PortName, channel string, tlsHandshakeTimeShift time.Duration) *common.Config {
-	tempDir, err := ioutil.TempDir(n.RootDir, "fetchConfig")
+	tempDir, err := os.MkdirTemp(n.RootDir, "fetchConfig")
 	Expect(err).NotTo(HaveOccurred())
 	defer os.RemoveAll(tempDir)
 
@@ -1191,7 +1309,7 @@ func fetchConfigBlock(n *nwo.Network, peer *nwo.Peer, orderer *nwo.Orderer, port
 }
 
 func currentConfigBlockNumber(n *nwo.Network, peer *nwo.Peer, orderer *nwo.Orderer, port nwo.PortName, channel string, tlsHandshakeTimeShift time.Duration) uint64 {
-	tempDir, err := ioutil.TempDir(n.RootDir, "currentConfigBlock")
+	tempDir, err := os.MkdirTemp(n.RootDir, "currentConfigBlock")
 	Expect(err).NotTo(HaveOccurred())
 	defer os.RemoveAll(tempDir)
 
@@ -1202,7 +1320,7 @@ func currentConfigBlockNumber(n *nwo.Network, peer *nwo.Peer, orderer *nwo.Order
 }
 
 func updateOrdererConfig(n *nwo.Network, orderer *nwo.Orderer, port nwo.PortName, channel string, tlsHandshakeTimeShift time.Duration, current, updated *common.Config, submitter *nwo.Peer, additionalSigners ...*nwo.Orderer) {
-	tempDir, err := ioutil.TempDir(n.RootDir, "updateConfig")
+	tempDir, err := os.MkdirTemp(n.RootDir, "updateConfig")
 	Expect(err).NotTo(HaveOccurred())
 	updateFile := filepath.Join(tempDir, "update.pb")
 	defer os.RemoveAll(tempDir)

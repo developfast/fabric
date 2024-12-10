@@ -86,7 +86,7 @@ Maintainers
 The Fabric project is lead by the project's top level `maintainers <https://github.com/hyperledger/fabric/blob/main/MAINTAINERS.md>`__.
 The maintainers are responsible for reviewing and merging all patches submitted
 for review, and they guide the overall technical direction of the project within
-the guidelines established by the Hyperledger Technical Steering Committee (TSC).
+the guidelines established by the Hyperledger Technical Oversight Committee (TOC).
 
 Becoming a maintainer
 ~~~~~~~~~~~~~~~~~~~~~
@@ -171,8 +171,7 @@ discussions/decisions to the `Fabric contributor meeting <https://wiki.hyperledg
 The mailing list, Discord, and GitHub each require their own login which you can request upon your first interaction.
 
 The Hyperledger Fabric `wiki <https://wiki.hyperledger.org/display/fabric>`__
-and the legacy issue management system in `Jira <https://jira.hyperledger.org/projects/FAB/issues>`__
-require a `Linux Foundation ID <https://identity.linuxfoundation.org/>`__,
+requires a `Linux Foundation ID <https://identity.linuxfoundation.org/>`__,
 but these resources are primarily for read-only reference and you will likely not need an ID.
 
 Contribution guide
@@ -207,7 +206,7 @@ issue. One of the project's maintainers should respond to your issue within 24
 hours. If not, please bump the issue with a comment and request that it be
 reviewed. You can also post to the relevant Hyperledger Fabric channel in
 `Hyperledger Discord <https://discord.com/servers/hyperledger-foundation-905194001349627914>`__.  For example, a doc bug should
-be broadcast to ``#fabric-documentation``, a database bug to ``#fabric-ledger``,
+be broadcast to ``#fabric-documentation``, a peer bug to ``#fabric-peer``,
 and so on...
 
 Submitting your fix
@@ -226,8 +225,10 @@ Review the list of issues and find
 something that interests you. You could also check the
 `"good first issue" <https://github.com/hyperledger/fabric/labels/good%20first%20issue>`__
 list. It is wise to start with something relatively straight forward and
-achievable, and that no one is already assigned. If no one is assigned,
-then assign the issue to yourself. Please be considerate and rescind the
+achievable, and that no one is already assigned.
+Please note, due to GitHub permissions, you might not be able to assign issues to yourself.
+If you find an issue that interests you and is unassigned, please let us know in the chat,
+and a maintainer will assign it to you. Please be considerate and rescind the
 assignment if you cannot finish in a reasonable time, or add a comment
 saying that you are still actively working the issue if you need a
 little more time.
@@ -282,8 +283,7 @@ it receives a review comment(s).
 
 This policy applies to all official Fabric projects (fabric, fabric-ca,
 fabric-samples, fabric-test, fabric-sdk-node, fabric-sdk-java, fabric-sdk-go, fabric-gateway-java,
-fabric-chaincode-node, fabric-chaincode-java, fabric-chaincode-evm,
-fabric-baseimage, and fabric-amcl).
+fabric-gateway, fabric-chaincode-go, fabric-chaincode-node, fabric-chaincode-java, and fabric-amcl).
 
 Setting up development environment
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

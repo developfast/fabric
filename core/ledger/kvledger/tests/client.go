@@ -9,17 +9,17 @@ package tests
 import (
 	"testing"
 
-	"github.com/golang/protobuf/proto"
-	"github.com/hyperledger/fabric-protos-go/common"
+	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
 	"github.com/hyperledger/fabric/core/common/privdata"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
-// client helps in a transction simulation. The client keeps accumlating the results of each simulated transaction
+// client helps in a transaction simulation. The client keeps accumulating the results of each simulated transaction
 // in a slice and at a later stage can be used to cut a test block for committing.
 // In a test, for each instantiated ledger, a single instance of a client is typically sufficient.
 type client struct {

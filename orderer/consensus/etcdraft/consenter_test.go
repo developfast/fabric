@@ -9,21 +9,19 @@ package etcdraft_test
 import (
 	"encoding/pem"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/golang/protobuf/proto"
-	"github.com/hyperledger/fabric-protos-go/common"
-	"github.com/hyperledger/fabric-protos-go/orderer"
-	etcdraftproto "github.com/hyperledger/fabric-protos-go/orderer/etcdraft"
-	"github.com/hyperledger/fabric/bccsp/sw"
+	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
+	"github.com/hyperledger/fabric-lib-go/common/flogging"
+	"github.com/hyperledger/fabric-protos-go-apiv2/common"
+	"github.com/hyperledger/fabric-protos-go-apiv2/orderer"
+	etcdraftproto "github.com/hyperledger/fabric-protos-go-apiv2/orderer/etcdraft"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/crypto/tlsgen"
-	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/ledger/testutil"
 	"github.com/hyperledger/fabric/core/config/configtest"
 	"github.com/hyperledger/fabric/internal/configtxgen/encoder"
@@ -42,6 +40,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"google.golang.org/protobuf/proto"
 )
 
 var certAsPEM []byte
@@ -77,12 +76,12 @@ var _ = Describe("Consenter", func() {
 		}
 		chainManager = &mocks.ChainManager{}
 		support = &consensusmocks.FakeConsenterSupport{}
-		dataDir, err = ioutil.TempDir("", "consenter-")
+		dataDir, err = os.MkdirTemp("", "consenter-")
 		Expect(err).NotTo(HaveOccurred())
 		walDir = path.Join(dataDir, "wal-")
 		snapDir = path.Join(dataDir, "snap-")
 
-		blockBytes, err := ioutil.ReadFile("testdata/mychannel.block")
+		blockBytes, err := os.ReadFile("testdata/mychannel.block")
 		Expect(err).NotTo(HaveOccurred())
 
 		goodConfigBlock := &common.Block{}
@@ -158,7 +157,7 @@ var _ = Describe("Consenter", func() {
 
 		BeforeEach(func() {
 			var err error
-			mspDir, err = ioutil.TempDir(dataDir, "msp")
+			mspDir, err = os.MkdirTemp(dataDir, "msp")
 			Expect(err).NotTo(HaveOccurred())
 
 			confAppRaft = genesisconfig.Load(genesisconfig.SampleDevModeEtcdRaftProfile, configtest.GetDevConfigDir())
@@ -181,10 +180,10 @@ var _ = Describe("Consenter", func() {
 			// Generate client pair using tlsCA and set it to the consenter
 			memberKeyPair, err = tlsCA.NewServerCertKeyPair("127.0.0.1", "::1", "localhost")
 			Expect(err).NotTo(HaveOccurred())
-			consenterDir, err := ioutil.TempDir(dataDir, "consenter")
+			consenterDir, err := os.MkdirTemp(dataDir, "consenter")
 			Expect(err).NotTo(HaveOccurred())
 			consenterCertPath := filepath.Join(consenterDir, "client.pem")
-			err = ioutil.WriteFile(consenterCertPath, memberKeyPair.Cert, 0o644)
+			err = os.WriteFile(consenterCertPath, memberKeyPair.Cert, 0o644)
 			Expect(err).NotTo(HaveOccurred())
 
 			confAppRaft.Orderer.EtcdRaft.Consenters[0].ClientTlsCert = []byte(consenterCertPath)
@@ -197,7 +196,7 @@ var _ = Describe("Consenter", func() {
 			confAppRaft.Orderer.Organizations[0].ID = fmt.Sprintf("SampleMSP-%d", time.Now().UnixNano())
 
 			// Write the TLS root cert to the msp folder
-			err = ioutil.WriteFile(filepath.Join(mspDir, "tlscacerts", "cert.pem"), tlsCA.CertBytes(), 0o644)
+			err = os.WriteFile(filepath.Join(mspDir, "tlscacerts", "cert.pem"), tlsCA.CertBytes(), 0o644)
 			Expect(err).NotTo(HaveOccurred())
 
 			bootstrapper, err := encoder.NewBootstrapper(confAppRaft)
@@ -232,10 +231,10 @@ var _ = Describe("Consenter", func() {
 			foreignKeyPair, err := foreignCA.NewServerCertKeyPair("127.0.0.1", "::1", "localhost")
 			Expect(err).NotTo(HaveOccurred())
 
-			consenterDir, err := ioutil.TempDir(dataDir, "foreign-consenter")
+			consenterDir, err := os.MkdirTemp(dataDir, "foreign-consenter")
 			Expect(err).NotTo(HaveOccurred())
 			foreignConsenterCertPath := filepath.Join(consenterDir, "client.pem")
-			err = ioutil.WriteFile(foreignConsenterCertPath, foreignKeyPair.Cert, 0o644)
+			err = os.WriteFile(foreignConsenterCertPath, foreignKeyPair.Cert, 0o644)
 			Expect(err).NotTo(HaveOccurred())
 
 			confAppRaft.Orderer.EtcdRaft.Consenters[0].ClientTlsCert = []byte(foreignConsenterCertPath)
@@ -424,7 +423,7 @@ var _ = Describe("Consenter", func() {
 		consenter := newConsenter(chainManager, tlsCA.CertBytes(), certAsPEM)
 
 		chain, err := consenter.HandleChain(support, &common.Metadata{})
-		Expect(chain).To((BeNil()))
+		Expect(chain).To(BeNil())
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("without a system channel, a follower should have been created"))
 	})
@@ -542,7 +541,7 @@ var _ = Describe("Consenter", func() {
 		consenter := newConsenter(chainManager, tlsCA.CertBytes(), certAsPEM)
 
 		chain, err := consenter.HandleChain(support, &common.Metadata{})
-		Expect(chain).To((BeNil()))
+		Expect(chain).To(BeNil())
 		Expect(err).To(MatchError("without a system channel, a follower should have been created: not in the channel"))
 	})
 })

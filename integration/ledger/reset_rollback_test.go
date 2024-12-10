@@ -10,14 +10,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 
 	docker "github.com/fsouza/go-dockerclient"
-	"github.com/hyperledger/fabric-protos-go/common"
+	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/integration/channelparticipation"
 	"github.com/hyperledger/fabric/integration/nwo"
 	"github.com/hyperledger/fabric/integration/nwo/commands"
@@ -316,7 +315,7 @@ type setup struct {
 
 func initThreeOrgsSetup() *setup {
 	var err error
-	testDir, err := ioutil.TempDir("", "reset-rollback")
+	testDir, err := os.MkdirTemp("", "reset-rollback")
 	Expect(err).NotTo(HaveOccurred())
 
 	client, err := docker.NewClientFromEnv()

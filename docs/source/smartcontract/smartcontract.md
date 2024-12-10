@@ -99,7 +99,7 @@ state, and can also query the immutable blockchain record of transactions.
   current state of the ledger, but not its history.
 
 Smart contracts have many
-[APIs](../developapps/transactioncontext.html#structure) available to them.
+[APIs](../chaincode4ade.html#fabric-contract-api) available to them.
 Critically, in all cases, whether transactions create, read, update or delete
 business objects in the world state, the blockchain contains an [immutable
 record](../ledger/ledger.html) of these changes.
@@ -114,7 +114,7 @@ about chaincode; everyone else can think in terms of smart contracts.
 
 At the heart of a smart contract is a set of `transaction` definitions. For
 example, look at assetTransfer.js
-[here](https://github.com/hyperledger/fabric-samples/blob/{BRANCH}/asset-transfer-basic/chaincode-javascript/lib/assetTransfer.js#L67),
+[here](https://github.com/hyperledger/fabric-samples/blob/main/asset-transfer-basic/chaincode-javascript/lib/assetTransfer.js#L67),
 where you can see a smart contract transaction that creates a new asset:
 
 ```javascript
@@ -304,11 +304,6 @@ abbreviations:
   your peers, the approval of chaincode definitions for your organization, and
   the committing of chaincode definitions to channels. You can read more about
   how `_lifecycle` implements the Fabric chaincode lifecycle [process](../chaincode_lifecycle.html).
-
-* Lifecycle system chaincode (LSCC) manages the chaincode lifecycle for the
-  1.x releases of Fabric. This version of lifecycle required that chaincode be
-  instantiated or upgraded on channels. You can still use LSCC to manage your
-  chaincode if you have the channel application capability set to V1_4_x or below.
 
 * **Configuration system chaincode (CSCC)** runs in all peers to handle changes to a
   channel configuration, such as a policy update.  You can read more about this

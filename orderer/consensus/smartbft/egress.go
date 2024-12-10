@@ -9,12 +9,23 @@ package smartbft
 import (
 	"sync/atomic"
 
-	protos "github.com/SmartBFT-Go/consensus/smartbftprotos"
-	"github.com/golang/protobuf/proto"
-	cb "github.com/hyperledger/fabric-protos-go/common"
-	ab "github.com/hyperledger/fabric-protos-go/orderer"
+	"github.com/hyperledger-labs/SmartBFT/pkg/api"
+	protos "github.com/hyperledger-labs/SmartBFT/smartbftprotos"
+	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
+	ab "github.com/hyperledger/fabric-protos-go-apiv2/orderer"
+	"github.com/hyperledger/fabric/orderer/common/cluster"
 	"github.com/hyperledger/fabric/protoutil"
+	"google.golang.org/protobuf/proto"
 )
+
+//go:generate mockery --dir . --name EgressComm --case underscore --with-expecter=true --output mocks
+
+type EgressCommFactory func(runtimeConfig *atomic.Value, channelId string, comm cluster.Communicator) EgressComm
+
+// Comm enables the communications between the nodes.
+type EgressComm interface {
+	api.Comm
+}
 
 //go:generate mockery -dir . -name RPC -case underscore -output mocks
 
@@ -43,9 +54,7 @@ type Egress struct {
 func (e *Egress) Nodes() []uint64 {
 	nodes := e.RuntimeConfig.Load().(RuntimeConfig).Nodes
 	var res []uint64
-	for _, n := range nodes {
-		res = append(res, (uint64)(n))
-	}
+	res = append(res, nodes...)
 	return res
 }
 
@@ -65,7 +74,6 @@ func (e *Egress) SendTransaction(targetID uint64, request []byte) {
 		e.Logger.Panicf("Failed unmarshaling request %v to envelope: %v", request, err)
 	}
 	msg := &ab.SubmitRequest{
-		Channel: e.Channel,
 		Payload: env,
 	}
 
@@ -80,6 +88,5 @@ func (e *Egress) SendTransaction(targetID uint64, request []byte) {
 func bftMsgToClusterMsg(message *protos.Message, channel string) *ab.ConsensusRequest {
 	return &ab.ConsensusRequest{
 		Payload: protoutil.MarshalOrPanic(message),
-		Channel: channel,
 	}
 }

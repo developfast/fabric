@@ -13,14 +13,13 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/golang/protobuf/proto"
-	cb "github.com/hyperledger/fabric-protos-go/common"
-	"github.com/hyperledger/fabric/bccsp"
+	"github.com/hyperledger/fabric-lib-go/bccsp"
+	"github.com/hyperledger/fabric-lib-go/common/flogging"
+	"github.com/hyperledger/fabric-lib-go/common/metrics"
+	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/configtx"
-	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
-	"github.com/hyperledger/fabric/common/metrics"
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
 	"github.com/hyperledger/fabric/orderer/common/blockcutter"
@@ -34,6 +33,7 @@ import (
 	"github.com/hyperledger/fabric/orderer/consensus/etcdraft"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -488,8 +488,10 @@ func (r *Registrar) createNewChain(configtx *cb.Envelope) *ChainSupport {
 // SwitchFollowerToChain creates a consensus.Chain from the tip of the ledger, and removes the follower.
 // It is called when a follower detects a config block that indicates cluster membership and halts, transferring
 // execution to the consensus.Chain.
-func (r *Registrar) SwitchFollowerToChain(channelID string) {
-	r.lock.Lock()
+func (r *Registrar) SwitchFollowerToChain(channelID string) bool {
+	if !r.lock.TryLock() {
+		return false
+	}
 	defer r.lock.Unlock()
 
 	lf, err := r.ledgerFactory.GetOrCreate(channelID)
@@ -504,11 +506,13 @@ func (r *Registrar) SwitchFollowerToChain(channelID string) {
 	delete(r.followers, channelID)
 	logger.Debugf("Removed follower for channel %s", channelID)
 	cs := r.createNewChain(configTx(lf))
-	if err := r.removeJoinBlock(channelID); err != nil {
+	if err = r.removeJoinBlock(channelID); err != nil {
 		logger.Panicf("Failed removing join-block for channel: %s: %v", channelID, err)
 	}
 	cs.start()
 	logger.Infof("Created and started channel %s", cs.ChannelID())
+
+	return true
 }
 
 // SwitchChainToFollower creates a follower.Chain from the tip of the ledger and removes the consensus.Chain.
@@ -648,6 +652,9 @@ func (r *Registrar) JoinChannel(channelID string, configBlock *cb.Block) (info t
 		return types.ChannelInfo{}, err
 	}
 
+	if configBlock == nil {
+		return types.ChannelInfo{}, errors.Wrap(err, "failed marshaling joinblock: proto: Marshal called with nil")
+	}
 	blockBytes, err := proto.Marshal(configBlock)
 	if err != nil {
 		return types.ChannelInfo{}, errors.Wrap(err, "failed marshaling joinblock")

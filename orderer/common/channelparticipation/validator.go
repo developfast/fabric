@@ -9,8 +9,8 @@ package channelparticipation
 import (
 	"bytes"
 
-	cb "github.com/hyperledger/fabric-protos-go/common"
-	"github.com/hyperledger/fabric/bccsp/factory"
+	"github.com/hyperledger/fabric-lib-go/bccsp/factory"
+	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/orderer/common/types"
 	"github.com/hyperledger/fabric/protoutil"
@@ -31,7 +31,8 @@ func ValidateJoinBlock(configBlock *cb.Block) (channelID string, err error) {
 		return "", errors.New("invalid block: does not have metadata")
 	}
 
-	if !bytes.Equal(protoutil.BlockDataHash(configBlock.Data), configBlock.Header.DataHash) {
+	dataHash := protoutil.ComputeBlockDataHash(configBlock.Data)
+	if !bytes.Equal(dataHash, configBlock.Header.DataHash) {
 		return "", errors.New("invalid block: Header.DataHash is different from Hash(block.Data)")
 	}
 

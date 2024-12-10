@@ -13,17 +13,22 @@ on:
       - .github/workflows/broken-link-checker.yml
 
 env:
-  GO_VER: 1.20.7
+  GO_VER: 1.23.3
+
+permissions:
+  contents: read
 
 jobs:
   broken-lint-checker:
+    # Only run the scheduled job in hyperledger/fabric repository, not on personal forks
+    if: github.event_name != 'schedule' || (github.event_name == 'schedule' && github.repository == 'hyperledger/fabric')
     name: "Check for Broken Links"
-    runs-on: fabric-ubuntu-latest
+    runs-on: ${{ github.repository == 'hyperledger/fabric' && 'fabric-ubuntu-22.04' || 'ubuntu-22.04' }}
     steps:
       - name: Checkout Fabric Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Setup Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VER }}
       - name: Install Muffet

@@ -4,9 +4,6 @@ The following prerequisites are required to run a Docker-based Fabric test netwo
 
 ## Mac
 
-<!--- Indent entire section -->
-<div style="margin-left: 1.5em;">
-
 ### Homebrew
 
 For macOS, we recommend using [Homebrew](https://brew.sh) to manage the prereqs.
@@ -68,7 +65,7 @@ docker-compose --version # => docker-compose version 1.27.2, build 18f557f9
 ```
 
 > **Note:** Some users have reported errors while running Fabric-Samples with the Docker Desktop `gRPC FUSE for file sharing` option checked.
-> Please uncheck this option in your Docker Preferences to continue using `osxfs for file sharing`.
+> Please utilize a different file sharing implementation option.
 
 ### Go
 
@@ -76,25 +73,20 @@ Optional: Install the latest Fabric supported version of [Go](https://golang.org
 installed (only required if you will be writing Go chaincode or SDK applications).
 
 ```shell
-brew install go@1.20.7
-go version # => go1.20.7 darwin/amd64
+brew install go@1.23.3
+go version # => go1.23.3 darwin/amd64
 ```
 
 ### JQ
 
-Optional: Install the latest version of [jq](https://stedolan.github.io/jq/download/) if it is not already installed
-(only required for the tutorials related to channel configuration transactions).
+Install the latest version of [jq](https://stedolan.github.io/jq/download/) if it is not already installed, it's required for the tutorials that utilize the fabric-samples test-network.
 
 ```shell
 brew install jq
 jq --version # => jq-1.6
 ```
-</div>
 
 ## **Linux (Ubuntu/Debian based distro)**
-
-<!--- Indent entire section -->
-<div style="margin-left: 1.5em;">
 
 Prerequisites: [git](https://git-scm.com/downloads), [cURL](https://curl.haxx.se/download.html), [Docker](https://docs.docker.com/get-docker/)
 
@@ -123,12 +115,7 @@ Optional: Install the latest version of [Go](https://golang.org/doc/install) (on
 
 Optional: Install the latest version of [jq](https://stedolan.github.io/jq/download/) (only required for the tutorials related to channel configuration transactions).
 
-</div>
-
 ## **Windows**
-
-<!--- Indent entire section -->
-<div style="margin-left: 1.5em;">
 
 ### Docker
 
@@ -147,7 +134,7 @@ Finally, you need to ensure Docker Desktop has integration enabled for your dist
 
 ### Microsoft VS Code (Optional)
 
-Microsoft VS Code provides an IDE that has tight integration with WSL2 Linux Distibutions. Search the Microsoft Marketplace in VS Code for the Remote Development extension pack for more information. This pack includes, among other things, the `Remote - WSL extension` and the `Remote - Containers` extension.
+Microsoft VS Code provides an IDE that has tight integration with WSL2 Linux Distributions. Search the Microsoft Marketplace in VS Code for the Remote Development extension pack for more information. This pack includes, among other things, the `Remote - WSL extension` and the `Remote - Containers` extension.
 
 ### Git For Windows (Optional)
 
@@ -165,8 +152,6 @@ git config --get core.autocrlf
 git config --get core.longpaths
 ```
 These output from these commands should be false and true respectively.
-
-</div>
 
 ## **Notes**
 

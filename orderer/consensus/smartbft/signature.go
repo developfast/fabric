@@ -10,11 +10,11 @@ import (
 	"encoding/asn1"
 	"math/big"
 
-	"github.com/SmartBFT-Go/consensus/pkg/types"
-	"github.com/golang/protobuf/proto"
-	cb "github.com/hyperledger/fabric-protos-go/common"
+	"github.com/hyperledger-labs/SmartBFT/pkg/types"
+	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/pkg/errors"
+	"google.golang.org/protobuf/proto"
 )
 
 // Signature implementation
@@ -45,7 +45,7 @@ func (sig Signature) AsBytes() []byte {
 	return msg2Sign
 }
 
-// ProposalToBlock marshals the proposal the the block
+// ProposalToBlock marshals the proposal the block
 func ProposalToBlock(proposal types.Proposal) (*cb.Block, error) {
 	// initialize block with empty fields
 	block := &cb.Block{

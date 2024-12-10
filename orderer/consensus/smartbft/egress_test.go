@@ -9,10 +9,10 @@ package smartbft_test
 import (
 	"testing"
 
-	protos "github.com/SmartBFT-Go/consensus/smartbftprotos"
-	cb "github.com/hyperledger/fabric-protos-go/common"
-	ab "github.com/hyperledger/fabric-protos-go/orderer"
-	"github.com/hyperledger/fabric/common/flogging"
+	protos "github.com/hyperledger-labs/SmartBFT/smartbftprotos"
+	"github.com/hyperledger/fabric-lib-go/common/flogging"
+	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
+	ab "github.com/hyperledger/fabric-protos-go-apiv2/orderer"
 	"github.com/hyperledger/fabric/orderer/consensus/smartbft"
 	"github.com/hyperledger/fabric/orderer/consensus/smartbft/mocks"
 	"github.com/hyperledger/fabric/protoutil"
@@ -42,7 +42,6 @@ func TestEgressSendConsensus(t *testing.T) {
 
 	rpc.AssertCalled(t, "SendConsensus", uint64(42), &ab.ConsensusRequest{
 		Payload: protoutil.MarshalOrPanic(viewData),
-		Channel: "test",
 	})
 }
 
@@ -70,7 +69,6 @@ func TestEgressSendTransaction(t *testing.T) {
 	})
 
 	rpc.AssertCalled(t, "SendSubmit", uint64(42), &ab.SubmitRequest{
-		Channel: "test",
 		Payload: &cb.Envelope{
 			Payload: []byte{1, 2, 3},
 		},

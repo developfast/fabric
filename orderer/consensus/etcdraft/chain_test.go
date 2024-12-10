@@ -9,7 +9,6 @@ package etcdraft_test
 import (
 	"encoding/pem"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/user"
 	"path"
@@ -18,16 +17,15 @@ import (
 	"time"
 
 	"code.cloudfoundry.org/clock/fakeclock"
-	"github.com/golang/protobuf/proto"
-	"github.com/hyperledger/fabric-protos-go/common"
-	"github.com/hyperledger/fabric-protos-go/orderer"
-	raftprotos "github.com/hyperledger/fabric-protos-go/orderer/etcdraft"
-	"github.com/hyperledger/fabric/bccsp"
-	"github.com/hyperledger/fabric/bccsp/factory"
-	"github.com/hyperledger/fabric/bccsp/sw"
+	"github.com/hyperledger/fabric-lib-go/bccsp"
+	"github.com/hyperledger/fabric-lib-go/bccsp/factory"
+	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
+	"github.com/hyperledger/fabric-lib-go/common/flogging"
+	"github.com/hyperledger/fabric-protos-go-apiv2/common"
+	"github.com/hyperledger/fabric-protos-go-apiv2/orderer"
+	raftprotos "github.com/hyperledger/fabric-protos-go-apiv2/orderer/etcdraft"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/crypto/tlsgen"
-	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/orderer/common/cluster"
 	orderer_types "github.com/hyperledger/fabric/orderer/common/types"
 	"github.com/hyperledger/fabric/orderer/consensus/etcdraft"
@@ -39,9 +37,11 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/types"
 	"github.com/pkg/errors"
-	raft "go.etcd.io/etcd/raft/v3"
+	"go.etcd.io/etcd/raft/v3"
 	"go.etcd.io/etcd/raft/v3/raftpb"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/protoadapt"
 )
 
 const (
@@ -148,7 +148,7 @@ var _ = Describe("Chain", func() {
 			clock = fakeclock.NewFakeClock(time.Now())
 			storage = raft.NewMemoryStorage()
 
-			dataDir, err = ioutil.TempDir("", "wal-")
+			dataDir, err = os.MkdirTemp("", "wal-")
 			Expect(err).NotTo(HaveOccurred())
 			walDir = path.Join(dataDir, "wal")
 			snapDir = path.Join(dataDir, "snapshot")
@@ -207,7 +207,7 @@ var _ = Describe("Chain", func() {
 
 		campaign := func(c *etcdraft.Chain, observeC <-chan raft.SoftState) {
 			Eventually(func() <-chan raft.SoftState {
-				c.Consensus(&orderer.ConsensusRequest{Payload: protoutil.MarshalOrPanic(&raftpb.Message{Type: raftpb.MsgTimeoutNow, To: 1})}, 0)
+				c.Consensus(&orderer.ConsensusRequest{Payload: protoutil.MarshalOrPanic(protoadapt.MessageV2Of(&raftpb.Message{Type: raftpb.MsgTimeoutNow, To: 1}))}, 0)
 				return observeC
 			}, LongEventualTimeout).Should(Receive(StateEqual(1, raft.StateLeader)))
 		}
@@ -271,6 +271,7 @@ var _ = Describe("Chain", func() {
 				chain.Halt()
 
 				By("Create new chain")
+				opts.MemoryStorage = raft.NewMemoryStorage()
 				_, err := etcdraft.NewChain(support, opts, configurator, nil, cryptoProvider, noOpBlockPuller, nil, observeC)
 				Expect(err).NotTo(HaveOccurred())
 			})
@@ -552,11 +553,19 @@ var _ = Describe("Chain", func() {
 								},
 								"ConsensusType": {
 									Version: 4,
+									Value: marshalOrPanic(&orderer.ConsensusType{
+										Type:     "etcdraft",
+										Metadata: []byte{1, 2, 3},
+									}),
 								},
 							}
 							oldValues := map[string]*common.ConfigValue{
 								"ConsensusType": {
 									Version: 4,
+									Value: marshalOrPanic(&orderer.ConsensusType{
+										Type:     "etcdraft",
+										Metadata: []byte{1, 2, 3},
+									}),
 								},
 							}
 							configEnv = newConfigEnv(channelID,
@@ -678,6 +687,7 @@ var _ = Describe("Chain", func() {
 								"ConsensusType": {
 									Version: 1,
 									Value: marshalOrPanic(&orderer.ConsensusType{
+										Type:     "etcdraft",
 										Metadata: marshalOrPanic(consenterMetadata),
 									}),
 								},
@@ -711,6 +721,7 @@ var _ = Describe("Chain", func() {
 								"ConsensusType": {
 									Version: 1,
 									Value: marshalOrPanic(&orderer.ConsensusType{
+										Type:     "etcdraft",
 										Metadata: marshalOrPanic(metadata),
 									}),
 								},
@@ -722,6 +733,35 @@ var _ = Describe("Chain", func() {
 
 							err := chain.Configure(configEnv, configSeq)
 							Expect(err).NotTo(HaveOccurred())
+							Eventually(support.WriteConfigBlockCallCount, LongEventualTimeout).Should(Equal(1))
+						})
+					})
+				})
+
+				Context("when a type C config update comes", func() {
+					Context("change from raft to bft", func() {
+						// use to prepare the Orderer Values
+						BeforeEach(func() {
+							values := map[string]*common.ConfigValue{
+								"ConsensusType": {
+									Version: 1,
+									Value: marshalOrPanic(&orderer.ConsensusType{
+										Type:     "BFT",
+										Metadata: []byte{1, 2},
+									}),
+								},
+							}
+							configEnv = newConfigEnv(channelID,
+								common.HeaderType_CONFIG,
+								newConfigUpdateEnv(channelID, nil, values))
+							configSeq = 0
+						}) // BeforeEach block
+
+						It("should be able to process config update of type C", func() {
+							err := chain.Configure(configEnv, configSeq)
+							Expect(err).NotTo(HaveOccurred())
+							Expect(fakeFields.fakeConfigProposalsReceived.AddCallCount()).To(Equal(1))
+							Expect(fakeFields.fakeConfigProposalsReceived.AddArgsForCall(0)).To(Equal(float64(1)))
 							Eventually(support.WriteConfigBlockCallCount, LongEventualTimeout).Should(Equal(1))
 						})
 					})
@@ -846,7 +886,7 @@ var _ = Describe("Chain", func() {
 						It("fails to load wal", func() {
 							skipIfRoot()
 
-							files, err := ioutil.ReadDir(walDir)
+							files, err := os.ReadDir(walDir)
 							Expect(err).NotTo(HaveOccurred())
 							for _, f := range files {
 								os.Chmod(path.Join(walDir, f.Name()), 0o300)
@@ -866,7 +906,7 @@ var _ = Describe("Chain", func() {
 					)
 
 					countFiles := func() int {
-						files, err := ioutil.ReadDir(snapDir)
+						files, err := os.ReadDir(snapDir)
 						Expect(err).NotTo(HaveOccurred())
 						return len(files)
 					}
@@ -991,8 +1031,8 @@ var _ = Describe("Chain", func() {
 							}()
 
 							Consistently(done).ShouldNot(Receive())
-							close(signal)                         // unblock block puller
-							Eventually(done).Should(Receive(nil)) // WaitReady should be unblocked
+							close(signal)                             // unblock block puller
+							Eventually(done).Should(Receive(BeNil())) // WaitReady should be unblocked
 							Eventually(c.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(2))
 						})
 
@@ -1275,7 +1315,7 @@ var _ = Describe("Chain", func() {
 
 				When("WAL dir is a file", func() {
 					It("replaces file with fresh WAL dir", func() {
-						f, err := ioutil.TempFile("", "wal-")
+						f, err := os.CreateTemp("", "wal-")
 						Expect(err).NotTo(HaveOccurred())
 						defer os.RemoveAll(f.Name())
 
@@ -1306,7 +1346,7 @@ var _ = Describe("Chain", func() {
 
 				When("WAL dir is not writeable", func() {
 					It("replace it with fresh WAL dir", func() {
-						d, err := ioutil.TempDir("", "wal-")
+						d, err := os.MkdirTemp("", "wal-")
 						Expect(err).NotTo(HaveOccurred())
 						defer os.RemoveAll(d)
 
@@ -1338,7 +1378,7 @@ var _ = Describe("Chain", func() {
 					It("fails to bootstrap fresh raft node", func() {
 						skipIfRoot()
 
-						d, err := ioutil.TempDir("", "wal-")
+						d, err := os.MkdirTemp("", "wal-")
 						Expect(err).NotTo(HaveOccurred())
 						defer os.RemoveAll(d)
 
@@ -1386,7 +1426,7 @@ var _ = Describe("Chain", func() {
 			channelID = "multi-node-channel"
 			timeout = 10 * time.Second
 
-			dataDir, err = ioutil.TempDir("", "raft-test-")
+			dataDir, err = os.MkdirTemp("", "raft-test-")
 			Expect(err).NotTo(HaveOccurred())
 
 			cryptoProvider, err = sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
@@ -1426,6 +1466,7 @@ var _ = Describe("Chain", func() {
 				"ConsensusType": {
 					Version: 1,
 					Value: marshalOrPanic(&orderer.ConsensusType{
+						Type:     "etcdraft",
 						Metadata: marshalOrPanic(metadata),
 					}),
 				},
@@ -1538,10 +1579,11 @@ var _ = Describe("Chain", func() {
 
 			step1 := c1.getStepFunc()
 			c1.setStepFunc(func(dest uint64, msg *orderer.ConsensusRequest) error {
-				stepMsg := &raftpb.Message{}
-				if err := proto.Unmarshal(msg.Payload, stepMsg); err != nil {
+				tmp := protoadapt.MessageV2Of(&raftpb.Message{})
+				if err := proto.Unmarshal(msg.Payload, tmp); err != nil {
 					return fmt.Errorf("failed to unmarshal StepRequest payload to Raft Message: %s", err)
 				}
+				stepMsg := protoadapt.MessageV1Of(tmp).(*raftpb.Message)
 
 				if stepMsg.Type == raftpb.MsgTimeoutNow && atomic.CompareAndSwapUint32(&messageOmission, 0, 1) {
 					return nil
@@ -1621,7 +1663,7 @@ var _ = Describe("Chain", func() {
 			channelID = "multi-node-channel"
 			timeout = 10 * time.Second
 
-			dataDir, err = ioutil.TempDir("", "raft-test-")
+			dataDir, err = os.MkdirTemp("", "raft-test-")
 			Expect(err).NotTo(HaveOccurred())
 
 			raftMetadata = &raftprotos.BlockMetadata{
@@ -1770,6 +1812,7 @@ var _ = Describe("Chain", func() {
 						"ConsensusType": {
 							Version: 1,
 							Value: marshalOrPanic(&orderer.ConsensusType{
+								Type:     "etcdraft",
 								Metadata: marshalOrPanic(metadata),
 							}),
 						},
@@ -1853,6 +1896,7 @@ var _ = Describe("Chain", func() {
 						"ConsensusType": {
 							Version: 1,
 							Value: marshalOrPanic(&orderer.ConsensusType{
+								Type:     "etcdraft",
 								Metadata: marshalOrPanic(metadata),
 							}),
 						},
@@ -1893,6 +1937,7 @@ var _ = Describe("Chain", func() {
 						"ConsensusType": {
 							Version: 1,
 							Value: marshalOrPanic(&orderer.ConsensusType{
+								Type:     "etcdraft",
 								Metadata: marshalOrPanic(metadata),
 							}),
 						},
@@ -1935,6 +1980,7 @@ var _ = Describe("Chain", func() {
 							"ConsensusType": {
 								Version: 1,
 								Value: marshalOrPanic(&orderer.ConsensusType{
+									Type:     "etcdraft",
 									Metadata: marshalOrPanic(metadata),
 								}),
 							},
@@ -2307,7 +2353,7 @@ var _ = Describe("Chain", func() {
 							if retry > 0 {
 								retry -= 1
 								By("leadership transfer not complete, hence retrying")
-								c2.Consensus(&orderer.ConsensusRequest{Payload: protoutil.MarshalOrPanic(&raftpb.Message{Type: raftpb.MsgTimeoutNow, To: 2})}, 0)
+								c2.Consensus(&orderer.ConsensusRequest{Payload: protoutil.MarshalOrPanic(protoadapt.MessageV2Of(&raftpb.Message{Type: raftpb.MsgTimeoutNow, To: 2}))}, 0)
 								continue
 							}
 							Fail("Expected a new leader to present")
@@ -2738,9 +2784,9 @@ var _ = Describe("Chain", func() {
 				//
 				// Instead, we can simply send artificial MsgHeartbeatResp to leader to resume.
 				m2 := &raftpb.Message{To: c1.id, From: c2.id, Type: raftpb.MsgHeartbeatResp}
-				c1.Consensus(&orderer.ConsensusRequest{Channel: channelID, Payload: protoutil.MarshalOrPanic(m2)}, c2.id)
+				c1.Consensus(&orderer.ConsensusRequest{Channel: channelID, Payload: protoutil.MarshalOrPanic(protoadapt.MessageV2Of(m2))}, c2.id)
 				m3 := &raftpb.Message{To: c1.id, From: c3.id, Type: raftpb.MsgHeartbeatResp}
-				c1.Consensus(&orderer.ConsensusRequest{Channel: channelID, Payload: protoutil.MarshalOrPanic(m3)}, c3.id)
+				c1.Consensus(&orderer.ConsensusRequest{Channel: channelID, Payload: protoutil.MarshalOrPanic(protoadapt.MessageV2Of(m3))}, c3.id)
 
 				network.exec(func(c *chain) {
 					Eventually(c.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(3))
@@ -2769,8 +2815,9 @@ var _ = Describe("Chain", func() {
 
 				step1 := c1.getStepFunc()
 				c1.setStepFunc(func(dest uint64, msg *orderer.ConsensusRequest) error {
-					stepMsg := &raftpb.Message{}
-					Expect(proto.Unmarshal(msg.Payload, stepMsg)).NotTo(HaveOccurred())
+					tmp := protoadapt.MessageV2Of(&raftpb.Message{})
+					Expect(proto.Unmarshal(msg.Payload, tmp)).NotTo(HaveOccurred())
+					stepMsg := protoadapt.MessageV1Of(tmp).(*raftpb.Message)
 
 					if dest == 3 {
 						return nil
@@ -2793,8 +2840,9 @@ var _ = Describe("Chain", func() {
 
 				step2 := c2.getStepFunc()
 				c2.setStepFunc(func(dest uint64, msg *orderer.ConsensusRequest) error {
-					stepMsg := &raftpb.Message{}
-					Expect(proto.Unmarshal(msg.Payload, stepMsg)).NotTo(HaveOccurred())
+					tmp := protoadapt.MessageV2Of(&raftpb.Message{})
+					Expect(proto.Unmarshal(msg.Payload, tmp)).NotTo(HaveOccurred())
+					stepMsg := protoadapt.MessageV1Of(tmp).(*raftpb.Message)
 
 					if stepMsg.Type == raftpb.MsgApp && len(stepMsg.Entries) != 0 && dest == 3 {
 						for _, ent := range stepMsg.Entries {
@@ -2921,7 +2969,7 @@ var _ = Describe("Chain", func() {
 					c2.opts.SnapshotCatchUpEntries = 1
 
 					countSnapShotsForChain := func(cn *chain) int {
-						files, err := ioutil.ReadDir(cn.opts.SnapDir)
+						files, err := os.ReadDir(cn.opts.SnapDir)
 						Expect(err).NotTo(HaveOccurred())
 						return len(files)
 					}
@@ -2946,12 +2994,13 @@ var _ = Describe("Chain", func() {
 					step1 := c1.getStepFunc()
 
 					c1.setStepFunc(func(dest uint64, msg *orderer.ConsensusRequest) error {
-						stepMsg := &raftpb.Message{}
-						Expect(proto.Unmarshal(msg.Payload, stepMsg)).NotTo(HaveOccurred())
+						tmp := protoadapt.MessageV2Of(&raftpb.Message{})
+						Expect(proto.Unmarshal(msg.Payload, tmp)).NotTo(HaveOccurred())
+						stepMsg := protoadapt.MessageV1Of(tmp).(*raftpb.Message)
 						if dest == 3 && stepMsg.Type == raftpb.MsgApp && len(stepMsg.Entries) > 0 {
 							stepMsg.Entries = stepMsg.Entries[0:1]
 							stepMsg.Entries[0].Data = nil
-							msg.Payload = protoutil.MarshalOrPanic(stepMsg)
+							msg.Payload = protoutil.MarshalOrPanic(protoadapt.MessageV2Of(stepMsg))
 						}
 						return step1(dest, msg)
 					})
@@ -2965,8 +3014,9 @@ var _ = Describe("Chain", func() {
 					// order data on all nodes except node 3, send raft raftpb.EntryConfChange message to node 3
 					// node 1 should take a snapshot but node 3 should not
 					c1.setStepFunc(func(dest uint64, msg *orderer.ConsensusRequest) error {
-						stepMsg := &raftpb.Message{}
-						Expect(proto.Unmarshal(msg.Payload, stepMsg)).NotTo(HaveOccurred())
+						tmp := protoadapt.MessageV2Of(&raftpb.Message{})
+						Expect(proto.Unmarshal(msg.Payload, tmp)).NotTo(HaveOccurred())
+						stepMsg := protoadapt.MessageV1Of(tmp).(*raftpb.Message)
 						if dest == 3 && stepMsg.Type == raftpb.MsgApp && len(stepMsg.Entries) > 0 {
 							stepMsg.Entries = stepMsg.Entries[0:1]
 							// change message type to raftpb.EntryConfChange
@@ -2975,7 +3025,7 @@ var _ = Describe("Chain", func() {
 							data, err := cc.Marshal()
 							Expect(err).NotTo(HaveOccurred())
 							stepMsg.Entries[0].Data = data
-							msg.Payload = protoutil.MarshalOrPanic(stepMsg)
+							msg.Payload = protoutil.MarshalOrPanic(protoadapt.MessageV2Of(stepMsg))
 						}
 						return step1(dest, msg)
 					})
@@ -3304,7 +3354,7 @@ func nodeConfigFromMetadata(consenterMetadata *raftprotos.ConfigMetadata) []clus
 
 func createMetadata(nodeCount int, tlsCA tlsgen.CA) *raftprotos.ConfigMetadata {
 	md := &raftprotos.ConfigMetadata{Options: &raftprotos.Options{
-		TickInterval:      time.Duration(interval).String(),
+		TickInterval:      interval.String(),
 		ElectionTick:      ELECTION_TICK,
 		HeartbeatTick:     HEARTBEAT_TICK,
 		MaxInflightBlocks: 5,
@@ -3409,7 +3459,7 @@ func newChain(
 
 	opts := etcdraft.Options{
 		RPCTimeout:          timeout,
-		RaftID:              uint64(id),
+		RaftID:              id,
 		Clock:               clock,
 		TickInterval:        interval,
 		ElectionTick:        ELECTION_TICK,
@@ -3693,18 +3743,18 @@ func (n *network) addChain(c *chain) {
 		return block
 	}
 
-	c.puller.HeightsByEndpointsStub = func() (map[string]uint64, error) {
+	c.puller.HeightsByEndpointsStub = func() (map[string]uint64, string, error) {
 		n.RLock()
 		leader := n.chains[n.leader]
 		n.RUnlock()
 
 		if leader == nil {
-			return nil, errors.Errorf("ledger not available")
+			return nil, "", errors.Errorf("ledger not available")
 		}
 
 		leader.ledgerLock.RLock()
 		defer leader.ledgerLock.RUnlock()
-		return map[string]uint64{"leader": leader.ledgerHeight}, nil
+		return map[string]uint64{"leader": leader.ledgerHeight}, "", nil
 	}
 
 	c.configurator.ConfigureCalls(func(channel string, nodes []cluster.RemoteNode) {
@@ -3736,7 +3786,7 @@ func createNetwork(
 	}
 
 	for _, nodeID := range raftMetadata.ConsenterIds {
-		dir, err := ioutil.TempDir(dataDir, fmt.Sprintf("node-%d-", nodeID))
+		dir, err := os.MkdirTemp(dataDir, fmt.Sprintf("node-%d-", nodeID))
 		Expect(err).NotTo(HaveOccurred())
 
 		m := proto.Clone(raftMetadata).(*raftprotos.BlockMetadata)
@@ -3890,7 +3940,7 @@ func (n *network) elect(id uint64) {
 
 	// Send node an artificial MsgTimeoutNow to emulate leadership transfer.
 	fmt.Fprintf(GinkgoWriter, "Send artificial MsgTimeoutNow to elect node %d\n", id)
-	candidate.Consensus(&orderer.ConsensusRequest{Payload: protoutil.MarshalOrPanic(&raftpb.Message{Type: raftpb.MsgTimeoutNow, To: id})}, 0)
+	candidate.Consensus(&orderer.ConsensusRequest{Payload: protoutil.MarshalOrPanic(protoadapt.MessageV2Of(&raftpb.Message{Type: raftpb.MsgTimeoutNow, To: id}))}, 0)
 	Eventually(candidate.observe, LongEventualTimeout).Should(Receive(StateEqual(id, raft.StateLeader)))
 
 	n.Lock()

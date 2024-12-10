@@ -10,9 +10,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/SmartBFT-Go/consensus/pkg/types"
-	"github.com/hyperledger/fabric-protos-go/common"
-	"github.com/hyperledger/fabric/common/flogging"
+	"github.com/hyperledger-labs/SmartBFT/pkg/types"
+	"github.com/hyperledger/fabric-lib-go/common/flogging"
+	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/orderer/consensus/smartbft"
 	"github.com/hyperledger/fabric/orderer/consensus/smartbft/mocks"
 	"github.com/hyperledger/fabric/protoutil"
@@ -99,6 +99,7 @@ func TestAssembler(t *testing.T) {
 
 func makeTx(headerType int32) []byte {
 	return protoutil.MarshalOrPanic(&common.Envelope{
+		Signature: []byte{1, 2, 3},
 		Payload: protoutil.MarshalOrPanic(&common.Payload{
 			Header: &common.Header{
 				ChannelHeader: protoutil.MarshalOrPanic(&common.ChannelHeader{
@@ -136,6 +137,7 @@ func makeConfigBlock(seq uint64) *common.Block {
 		},
 		Data: &common.BlockData{
 			Data: [][]byte{protoutil.MarshalOrPanic(&common.Envelope{
+				Signature: []byte{1, 2, 3},
 				Payload: protoutil.MarshalOrPanic(&common.Payload{
 					Data: protoutil.MarshalOrPanic(&common.ConfigEnvelope{
 						Config: &common.Config{
@@ -159,7 +161,7 @@ func makeConfigBlock(seq uint64) *common.Block {
 func proposalFromRequests(verificationSeq, seq, lastConfigSeq uint64, lastBlockHash, metadata []byte, requests ...[]byte) types.Proposal {
 	block := protoutil.NewBlock(seq, nil)
 	block.Data = &common.BlockData{Data: requests}
-	block.Header.DataHash = protoutil.BlockDataHash(block.Data)
+	block.Header.DataHash = protoutil.ComputeBlockDataHash(block.Data)
 	block.Header.PreviousHash = lastBlockHash
 	block.Metadata.Metadata[common.BlockMetadataIndex_LAST_CONFIG] = protoutil.MarshalOrPanic(&common.Metadata{
 		Value: protoutil.MarshalOrPanic(&common.LastConfig{Index: lastConfigSeq}),

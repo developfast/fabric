@@ -10,8 +10,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/golang/protobuf/proto"
-	"github.com/hyperledger/fabric-protos-go/orderer"
+	"github.com/hyperledger/fabric-protos-go-apiv2/orderer"
+	"google.golang.org/protobuf/proto"
 )
 
 //go:generate mockery --dir . --name Communicator --case underscore --output ./mocks/
@@ -74,8 +74,9 @@ func (rm RemoteNode) String() string {
 		rm.ID, rm.Endpoint, DERtoPEM(rm.ServerTLSCert), DERtoPEM(rm.ClientTLSCert), rm.ServerRootCA)
 }
 
-// go:generate mockery --dir . --name StepClientStream --case underscore --output ./mocks/
 // StepClientStream
+//
+//go:generate mockery --dir . --name StepClientStream --case underscore --output ./mocks/
 type StepClientStream interface {
 	Send(request *orderer.StepRequest) error
 	Recv() (*orderer.StepResponse, error)

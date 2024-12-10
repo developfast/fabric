@@ -6,9 +6,9 @@
 #
 
 # if version not passed in, default to latest released version
-VERSION=2.5.3
+VERSION=2.5.9
 # if ca version not passed in, default to latest released version
-CA_VERSION=1.5.6
+CA_VERSION=1.5.12
 
 REGISTRY=${FABRIC_DOCKER_REGISTRY:-docker.io/hyperledger}
 
@@ -30,8 +30,8 @@ printHelp() {
     echo "-s : bypass fabric-samples repo clone"
     echo "-b : bypass download of platform-specific binaries"
     echo
-    echo "e.g. bootstrap.sh 2.5.3 1.5.6 -s"
-    echo "will download docker images and binaries for Fabric v2.5.3 and Fabric CA v1.5.6"
+    echo "e.g. bootstrap.sh 2.5.9 1.5.12 -s"
+    echo "will download docker images and binaries for Fabric v2.5.9 and Fabric CA v1.5.12"
 }
 
 # dockerPull() pulls docker images from fabric and chaincode repositories
@@ -42,7 +42,7 @@ dockerPull() {
     #three_digit_image_tag is passed in, e.g. "1.4.7"
     three_digit_image_tag=$1
     shift
-    #two_digit_image_tag is derived, e.g. "1.4", especially useful as a local tag for two digit references to most recent baseos, ccenv, javaenv, nodeenv patch releases
+    #two_digit_image_tag is derived, e.g. "1.4", especially useful as a local tag for two digit references
     two_digit_image_tag=$(echo "$three_digit_image_tag" | cut -d'.' -f1,2)
     while [[ $# -gt 0 ]]
     do
@@ -118,9 +118,9 @@ pullDockerImages() {
     command -v ${CONTAINER_CLI} >& /dev/null
     NODOCKER=$?
     if [ "${NODOCKER}" == 0 ]; then
-        FABRIC_IMAGES=(peer orderer ccenv tools)
+        FABRIC_IMAGES=(peer orderer ccenv)
         case "$VERSION" in
-        2.*)
+        [2-3].*)
             FABRIC_IMAGES+=(baseos)
             shift
             ;;

@@ -11,10 +11,10 @@ import (
 	"fmt"
 	"time"
 
-	pcommon "github.com/hyperledger/fabric-protos-go/common"
-	"github.com/hyperledger/fabric/bccsp"
+	"github.com/hyperledger/fabric-lib-go/bccsp"
+	"github.com/hyperledger/fabric-lib-go/common/flogging"
+	pcommon "github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/common/channelconfig"
-	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/gossip/api"
 	"github.com/hyperledger/fabric/gossip/common"
@@ -150,9 +150,13 @@ func (s *MSPMessageCryptoService) VerifyBlock(chainID common.ChannelID, seqNum u
 		return fmt.Errorf("Block with id [%d] on channel [%s] does not have metadata. Block not valid.", block.Header.Number, chainID)
 	}
 
+	dataHash, err := protoutil.BlockDataHash(block.Data)
+	if err != nil {
+		return err
+	}
 	// - Verify that Header.DataHash is equal to the hash of block.Data
 	// This is to ensure that the header is consistent with the data carried by this block
-	if !bytes.Equal(protoutil.BlockDataHash(block.Data), block.Header.DataHash) {
+	if !bytes.Equal(dataHash, block.Header.DataHash) {
 		return fmt.Errorf("Header.DataHash is different from Hash(block.Data) for block with id [%d] on channel [%s]", block.Header.Number, chainID)
 	}
 
@@ -262,7 +266,7 @@ func (s *MSPMessageCryptoService) VerifyByChannel(chainID common.ChannelID, peer
 	return policy.EvaluateSignedData(
 		[]*protoutil.SignedData{{
 			Data:      message,
-			Identity:  []byte(peerIdentity),
+			Identity:  peerIdentity,
 			Signature: signature,
 		}},
 	)
@@ -296,7 +300,7 @@ func (s *MSPMessageCryptoService) getValidatedIdentity(peerIdentity api.PeerIden
 	// the local MSP is required to take the final decision on the validity
 	// of the signature.
 	lDes := s.deserializer.GetLocalDeserializer()
-	identity, err := lDes.DeserializeIdentity([]byte(peerIdentity))
+	identity, err := lDes.DeserializeIdentity(peerIdentity)
 	if err == nil {
 		// No error means that the local MSP successfully deserialized the identity.
 		// We now check additional properties.
@@ -324,7 +328,7 @@ func (s *MSPMessageCryptoService) getValidatedIdentity(peerIdentity api.PeerIden
 	// Check against managers
 	for chainID, mspManager := range s.deserializer.GetChannelDeserializers() {
 		// Deserialize identity
-		identity, err := mspManager.DeserializeIdentity([]byte(peerIdentity))
+		identity, err := mspManager.DeserializeIdentity(peerIdentity)
 		if err != nil {
 			mcsLogger.Debugf("Failed deserialization identity %s on [%s]: [%s]", peerIdentity, chainID, err)
 			continue

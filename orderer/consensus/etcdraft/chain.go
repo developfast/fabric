@@ -15,14 +15,13 @@ import (
 	"time"
 
 	"code.cloudfoundry.org/clock"
-	"github.com/golang/protobuf/proto"
-	"github.com/hyperledger/fabric-protos-go/common"
-	"github.com/hyperledger/fabric-protos-go/orderer"
-	"github.com/hyperledger/fabric-protos-go/orderer/etcdraft"
-	"github.com/hyperledger/fabric/bccsp"
+	"github.com/hyperledger/fabric-lib-go/bccsp"
+	"github.com/hyperledger/fabric-lib-go/common/flogging"
+	"github.com/hyperledger/fabric-protos-go-apiv2/common"
+	"github.com/hyperledger/fabric-protos-go-apiv2/orderer"
+	"github.com/hyperledger/fabric-protos-go-apiv2/orderer/etcdraft"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/configtx"
-	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/orderer/common/cluster"
 	"github.com/hyperledger/fabric/orderer/common/types"
 	"github.com/hyperledger/fabric/orderer/consensus"
@@ -31,6 +30,8 @@ import (
 	"go.etcd.io/etcd/raft/v3"
 	"go.etcd.io/etcd/raft/v3/raftpb"
 	"go.etcd.io/etcd/server/v3/wal"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/protoadapt"
 )
 
 const (
@@ -91,7 +92,7 @@ type RPC interface {
 // BlockPuller is used to pull blocks from other OSN
 type BlockPuller interface {
 	PullBlock(seq uint64) *common.Block
-	HeightsByEndpoints() (map[string]uint64, error)
+	HeightsByEndpoints() (map[string]uint64, string, error)
 	Close()
 }
 
@@ -507,10 +508,11 @@ func (c *Chain) Consensus(req *orderer.ConsensusRequest, sender uint64) error {
 		return err
 	}
 
-	stepMsg := &raftpb.Message{}
-	if err := proto.Unmarshal(req.Payload, stepMsg); err != nil {
+	tmp := protoadapt.MessageV2Of(&raftpb.Message{})
+	if err := proto.Unmarshal(req.Payload, tmp); err != nil {
 		return fmt.Errorf("failed to unmarshal StepRequest payload to Raft Message: %s", err)
 	}
+	stepMsg := protoadapt.MessageV1Of(tmp).(*raftpb.Message)
 
 	if stepMsg.To != c.raftID {
 		c.logger.Warnf("Received msg to %d, my ID is probably wrong due to out of date, cowardly halting", stepMsg.To)
@@ -952,13 +954,13 @@ func (c *Chain) ordered(msg *orderer.SubmitRequest) (batches [][]*common.Envelop
 					if err := c.Node.abdicateLeadership(); err != nil {
 						// If there is no leader, abort and do not retry.
 						// Return early to prevent re-submission of the transaction
-						if err == ErrNoLeader || err == ErrChainHalting {
+						if errors.Is(err, ErrNoLeader) || errors.Is(err, ErrChainHalting) {
 							c.logger.Warningf("Abdication attempt no.%d failed because there is no leader or chain halting, will not try again, will not submit TX, error: %s", attempt, err)
 							return
 						}
 
 						// If the error isn't any of the below, it's a programming error, so panic.
-						if err != ErrNoAvailableLeaderCandidate && err != ErrTimedOutLeaderTransfer {
+						if !errors.Is(err, ErrNoAvailableLeaderCandidate) && !errors.Is(err, ErrTimedOutLeaderTransfer) {
 							c.logger.Panicf("Programming error, abdicateLeader() returned with an unexpected error: %s", err)
 						}
 
@@ -1115,7 +1117,25 @@ func (c *Chain) commitBlock(block *common.Block) {
 func (c *Chain) detectConfChange(block *common.Block) *MembershipChanges {
 	// If config is targeting THIS channel, inspect consenter set and
 	// propose raft ConfChange if it adds/removes node.
-	configMetadata := c.newConfigMetadata(block)
+	c.logger.Infof("Detected configuration change")
+
+	configMetadata, consensusType := c.newConfigMetadata(block)
+	c.logger.Infof("Detected configuration change: consensusType is: %s, configMetadata is: %v", consensusType, configMetadata)
+
+	if consensusType == nil {
+		c.logger.Infof("ConsensusType is %v", consensusType)
+		return nil
+	}
+
+	if consensusType.Type != "etcdraft" {
+		if consensusType.Type == "BFT" {
+			c.logger.Infof("Detected migration to %s", consensusType.Type)
+			return nil
+		} else {
+			c.logger.Panicf("illegal consensus type detected: %s", consensusType.Type)
+			panic("illegal consensus type detected during conf change")
+		}
+	}
 
 	if configMetadata == nil {
 		return nil
@@ -1424,13 +1444,14 @@ func (c *Chain) getInFlightConfChange() *raftpb.ConfChange {
 	return ConfChange(c.opts.BlockMetadata, confState)
 }
 
-// newMetadata extract config metadata from the configuration block
-func (c *Chain) newConfigMetadata(block *common.Block) *etcdraft.ConfigMetadata {
-	metadata, err := ConsensusMetadataFromConfigBlock(block)
+// newConfigMetadata extract config metadata from the configuration block
+func (c *Chain) newConfigMetadata(block *common.Block) (*etcdraft.ConfigMetadata, *orderer.ConsensusType) {
+	c.logger.Infof("Extract config metadata from the configuration block")
+	metadata, consensusType, err := ConsensusMetadataFromConfigBlock(block)
 	if err != nil {
 		c.logger.Panicf("error reading consensus metadata: %s", err)
 	}
-	return metadata
+	return metadata, consensusType
 }
 
 // ValidateConsensusMetadata determines the validity of a
@@ -1444,6 +1465,22 @@ func (c *Chain) ValidateConsensusMetadata(oldOrdererConfig, newOrdererConfig cha
 	// metadata was not updated
 	if newOrdererConfig.ConsensusMetadata() == nil {
 		return nil
+	}
+
+	if newOrdererConfig.ConsensusType() != "etcdraft" {
+		if newOrdererConfig.ConsensusType() == "BFT" {
+			// This is a migration, so we have to validate the config change and make sure that endpoints per org are configured
+			for _, org := range newOrdererConfig.Organizations() {
+				if len(org.Endpoints()) == 0 {
+					return errors.Errorf("illegal orderer config detected during consensus metadata validation: endpoints of org %s are missing", org.Name())
+				}
+			}
+			return nil
+		} else {
+			c.logger.Panicf("illegal consensus type detected during consensus metadata validation: %s", newOrdererConfig.ConsensusType())
+			return errors.Errorf("illegal consensus type detected during consensus metadata validation: %s", newOrdererConfig.ConsensusType())
+
+		}
 	}
 
 	if oldOrdererConfig == nil {
@@ -1572,7 +1609,7 @@ func (c *Chain) checkForEvictionNCertRotation(env *common.Envelope) bool {
 		return false
 	}
 
-	configMeta, err := MetadataFromConfigUpdate(configUpdate)
+	configMeta, _, err := MetadataFromConfigUpdate(configUpdate)
 	if err != nil || configMeta == nil {
 		c.logger.Warnf("could not read config metadata: %s", err)
 		return false

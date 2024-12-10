@@ -10,12 +10,13 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/hyperledger/fabric/bccsp"
-
-	cb "github.com/hyperledger/fabric-protos-go/common"
-	gproto "github.com/hyperledger/fabric-protos-go/gossip"
-	tspb "github.com/hyperledger/fabric-protos-go/transientstore"
-	"github.com/hyperledger/fabric/common/flogging"
+	"github.com/hyperledger/fabric-lib-go/bccsp"
+	"github.com/hyperledger/fabric-lib-go/common/flogging"
+	cb "github.com/hyperledger/fabric-protos-go-apiv2/common"
+	gproto "github.com/hyperledger/fabric-protos-go-apiv2/gossip"
+	tspb "github.com/hyperledger/fabric-protos-go-apiv2/transientstore"
+	"github.com/hyperledger/fabric/common/deliverclient/blocksprovider"
+	"github.com/hyperledger/fabric/common/deliverclient/orderers"
 	"github.com/hyperledger/fabric/core/committer"
 	"github.com/hyperledger/fabric/core/committer/txvalidator"
 	"github.com/hyperledger/fabric/core/common/privdata"
@@ -35,8 +36,6 @@ import (
 	"github.com/hyperledger/fabric/gossip/util"
 	corecomm "github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
-	"github.com/hyperledger/fabric/internal/pkg/peer/blocksprovider"
-	"github.com/hyperledger/fabric/internal/pkg/peer/orderers"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
@@ -127,7 +126,7 @@ type GossipServiceAdapter interface {
 // DeliveryServiceFactory factory to create and initialize delivery service instance
 type DeliveryServiceFactory interface {
 	// Returns an instance of delivery client
-	Service(g GossipServiceAdapter, ordererSource *orderers.ConnectionSource, mcs api.MessageCryptoService, isStaticLead bool, channelConfig *cb.Config, cryptoProvider bccsp.BCCSP) deliverservice.DeliverService
+	Service(g GossipServiceAdapter, ordererEndpointOverrides map[string]*orderers.Endpoint, isStaticLead bool, channelConfig *cb.Config, cryptoProvider bccsp.BCCSP) deliverservice.DeliverService
 }
 
 type deliveryFactoryImpl struct {
@@ -139,21 +138,20 @@ type deliveryFactoryImpl struct {
 // Returns an instance of delivery service
 func (df *deliveryFactoryImpl) Service(
 	g GossipServiceAdapter,
-	ordererSource *orderers.ConnectionSource,
-	mcs api.MessageCryptoService, isStaticLead bool,
+	ordererEndpointOverrides map[string]*orderers.Endpoint,
+	isStaticLead bool,
 	channelConfig *cb.Config,
 	cryptoProvider bccsp.BCCSP,
 ) deliverservice.DeliverService {
 	return deliverservice.NewDeliverService(
 		&deliverservice.Config{
-			IsStaticLeader:       isStaticLead,
-			CryptoSvc:            mcs,
-			Gossip:               g,
-			Signer:               df.signer,
-			DeliverServiceConfig: df.deliverServiceConfig,
-			OrdererSource:        ordererSource,
-			ChannelConfig:        channelConfig,
-			CryptoProvider:       cryptoProvider,
+			IsStaticLeader:           isStaticLead,
+			Gossip:                   g,
+			Signer:                   df.signer,
+			DeliverServiceConfig:     df.deliverServiceConfig,
+			OrdererEndpointOverrides: ordererEndpointOverrides,
+			ChannelConfig:            channelConfig,
+			CryptoProvider:           cryptoProvider,
 		})
 }
 
@@ -334,7 +332,14 @@ type Support struct {
 }
 
 // InitializeChannel allocates the state provider and should be invoked once per channel per execution
-func (g *GossipService) InitializeChannel(channelID string, ordererSource *orderers.ConnectionSource, store *transientstore.Store, support Support, channelConfig *cb.Config, cryptoProvider bccsp.BCCSP) {
+func (g *GossipService) InitializeChannel(
+	channelID string,
+	ordererEndpointOverrides map[string]*orderers.Endpoint,
+	store *transientstore.Store,
+	support Support,
+	channelConfig *cb.Config,
+	cryptoProvider bccsp.BCCSP,
+) {
 	g.lock.Lock()
 	defer g.lock.Unlock()
 	// Initialize new state provider for given committer
@@ -393,7 +398,7 @@ func (g *GossipService) InitializeChannel(channelID string, ordererSource *order
 		blockingMode,
 		stateConfig)
 	if g.deliveryService[channelID] == nil {
-		g.deliveryService[channelID] = g.deliveryFactory.Service(g, ordererSource, g.mcs, g.serviceConfig.OrgLeader, channelConfig, cryptoProvider)
+		g.deliveryService[channelID] = g.deliveryFactory.Service(g, ordererEndpointOverrides, g.serviceConfig.OrgLeader, channelConfig, cryptoProvider)
 	}
 
 	// Delivery service might be nil only if it was not able to get connected
@@ -442,7 +447,7 @@ func (g *GossipService) createSelfSignedData() protoutil.SignedData {
 
 // updateAnchors constructs a joinChannelMessage and sends it to the gossipSvc
 func (g *GossipService) updateAnchors(configUpdate ConfigUpdate) {
-	myOrg := string(g.secAdv.OrgByPeerIdentity(api.PeerIdentityType(g.peerIdentity)))
+	myOrg := string(g.secAdv.OrgByPeerIdentity(g.peerIdentity))
 	if !g.amIinChannel(myOrg, configUpdate) {
 		logger.Error("Tried joining channel", configUpdate.ChannelID, "but our org(", myOrg, "), isn't "+
 			"among the orgs of the channel:", orgListFromConfigUpdate(configUpdate), ", aborting.")

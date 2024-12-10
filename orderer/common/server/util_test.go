@@ -7,18 +7,17 @@ SPDX-License-Identifier: Apache-2.0
 package server
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/golang/protobuf/proto"
-	"github.com/hyperledger/fabric-protos-go/common"
-	"github.com/hyperledger/fabric/bccsp/sw"
-	"github.com/hyperledger/fabric/common/metrics/disabled"
+	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
+	"github.com/hyperledger/fabric-lib-go/common/metrics/disabled"
+	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/core/config/configtest"
 	config "github.com/hyperledger/fabric/orderer/common/localconfig"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestCreateLedgerFactory(t *testing.T) {
@@ -68,11 +67,11 @@ func TestValidateBootstrapBlock(t *testing.T) {
 	defer os.RemoveAll(cryptoPath)
 
 	systemChannelBlockPath, _ := produceGenesisFileEtcdRaft(t, "system", tempDir)
-	systemChannelBlockBytes, err := ioutil.ReadFile(systemChannelBlockPath)
+	systemChannelBlockBytes, err := os.ReadFile(systemChannelBlockPath)
 	require.NoError(t, err)
 
 	applicationChannelBlockPath, _ := produceGenesisFileEtcdRaftAppChannel(t, "mychannel", tempDir)
-	applicationChannelBlockBytes, err := ioutil.ReadFile(applicationChannelBlockPath)
+	applicationChannelBlockBytes, err := os.ReadFile(applicationChannelBlockPath)
 	require.NoError(t, err)
 
 	appBlock := &common.Block{}

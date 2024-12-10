@@ -13,15 +13,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hyperledger/fabric-protos-go/common"
-	"github.com/hyperledger/fabric-protos-go/peer"
-	transientstore2 "github.com/hyperledger/fabric-protos-go/transientstore"
-	"github.com/hyperledger/fabric/bccsp"
-	"github.com/hyperledger/fabric/bccsp/factory"
-	"github.com/hyperledger/fabric/bccsp/sw"
+	"github.com/hyperledger/fabric-lib-go/bccsp"
+	"github.com/hyperledger/fabric-lib-go/bccsp/factory"
+	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
+	"github.com/hyperledger/fabric-lib-go/common/metrics/disabled"
+	"github.com/hyperledger/fabric-protos-go-apiv2/common"
+	"github.com/hyperledger/fabric-protos-go-apiv2/peer"
+	transientstore2 "github.com/hyperledger/fabric-protos-go-apiv2/transientstore"
 	"github.com/hyperledger/fabric/common/channelconfig"
-	"github.com/hyperledger/fabric/common/flogging"
-	"github.com/hyperledger/fabric/common/metrics/disabled"
+	"github.com/hyperledger/fabric/common/deliverclient/blocksprovider"
+	"github.com/hyperledger/fabric/common/deliverclient/orderers"
 	"github.com/hyperledger/fabric/core/deliverservice"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/transientstore"
@@ -41,8 +42,6 @@ import (
 	"github.com/hyperledger/fabric/internal/peer/gossip/mocks"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
-	"github.com/hyperledger/fabric/internal/pkg/peer/blocksprovider"
-	"github.com/hyperledger/fabric/internal/pkg/peer/orderers"
 	"github.com/hyperledger/fabric/msp/mgmt"
 	msptesttools "github.com/hyperledger/fabric/msp/mgmt/testtools"
 	"github.com/stretchr/testify/require"
@@ -191,7 +190,7 @@ func TestLeaderElectionWithDeliverClient(t *testing.T) {
 		gossips[i].deliveryFactory = deliverServiceFactory
 		deliverServiceFactory.service.running = false
 
-		gossips[i].InitializeChannel(channelName, orderers.NewConnectionSource(flogging.MustGetLogger("peer.orderers"), nil), store.Store, Support{
+		gossips[i].InitializeChannel(channelName, nil, store.Store, Support{
 			Committer: &mockLedgerInfo{1},
 		}, nil, nil)
 		service, exist := gossips[i].leaderElection[channelName]
@@ -252,7 +251,7 @@ func TestWithStaticDeliverClientLeader(t *testing.T) {
 	for i := 0; i < n; i++ {
 		gossips[i].deliveryFactory = deliverServiceFactory
 		deliverServiceFactory.service.running = false
-		gossips[i].InitializeChannel(channelName, orderers.NewConnectionSource(flogging.MustGetLogger("peer.orderers"), nil), store.Store, Support{
+		gossips[i].InitializeChannel(channelName, nil, store.Store, Support{
 			Committer: &mockLedgerInfo{1},
 		}, nil, nil)
 	}
@@ -265,7 +264,7 @@ func TestWithStaticDeliverClientLeader(t *testing.T) {
 	channelName = "chanB"
 	for i := 0; i < n; i++ {
 		deliverServiceFactory.service.running = false
-		gossips[i].InitializeChannel(channelName, orderers.NewConnectionSource(flogging.MustGetLogger("peer.orderers"), nil), store.Store, Support{
+		gossips[i].InitializeChannel(channelName, nil, store.Store, Support{
 			Committer: &mockLedgerInfo{1},
 		}, nil, nil)
 	}
@@ -309,7 +308,7 @@ func TestWithStaticDeliverClientNotLeader(t *testing.T) {
 	for i := 0; i < n; i++ {
 		gossips[i].deliveryFactory = deliverServiceFactory
 		deliverServiceFactory.service.running = false
-		gossips[i].InitializeChannel(channelName, orderers.NewConnectionSource(flogging.MustGetLogger("peer.orderers"), nil), store.Store, Support{
+		gossips[i].InitializeChannel(channelName, nil, store.Store, Support{
 			Committer: &mockLedgerInfo{1},
 		}, nil, nil)
 	}
@@ -354,7 +353,7 @@ func TestWithStaticDeliverClientBothStaticAndLeaderElection(t *testing.T) {
 	for i := 0; i < n; i++ {
 		gossips[i].deliveryFactory = deliverServiceFactory
 		require.Panics(t, func() {
-			gossips[i].InitializeChannel(channelName, orderers.NewConnectionSource(flogging.MustGetLogger("peer.orderers"), nil), store.Store, Support{
+			gossips[i].InitializeChannel(channelName, nil, store.Store, Support{
 				Committer: &mockLedgerInfo{1},
 			}, nil, nil)
 		}, "Dynamic leader election based and static connection to ordering service can't exist simultaneously")
@@ -367,7 +366,7 @@ type mockDeliverServiceFactory struct {
 	service *mockDeliverService
 }
 
-func (mf *mockDeliverServiceFactory) Service(GossipServiceAdapter, *orderers.ConnectionSource, api.MessageCryptoService, bool, *common.Config, bccsp.BCCSP) deliverservice.DeliverService {
+func (mf *mockDeliverServiceFactory) Service(GossipServiceAdapter, map[string]*orderers.Endpoint, bool, *common.Config, bccsp.BCCSP) deliverservice.DeliverService {
 	return mf.service
 }
 
@@ -416,6 +415,10 @@ func (li *mockLedgerInfo) CommitPvtDataOfOldBlocks(reconciledPvtdata []*ledger.R
 
 func (li *mockLedgerInfo) GetPvtDataAndBlockByNum(seqNum uint64) (*ledger.BlockAndPvtData, error) {
 	panic("implement me")
+}
+
+func (li *mockLedgerInfo) GetCurrentBlockHash() ([]byte, error) {
+	return []byte{1, 2, 3, 4}, nil
 }
 
 // LedgerHeight returns mocked value to the ledger height
@@ -479,8 +482,9 @@ func TestLeaderElectionWithRealGossip(t *testing.T) {
 	electionMetrics := gossipmetrics.NewGossipMetrics(&disabled.Provider{}).ElectionMetrics
 
 	for i := 0; i < n; i++ {
-		services[i] = &electionService{nil, false, 0}
-		services[i].LeaderElectionService = gossips[i].newLeaderElectionComponent(channelName, services[i].callback, electionMetrics)
+		es := &electionService{nil, false, 0}
+		services[i] = es
+		services[i].LeaderElectionService = gossips[i].newLeaderElectionComponent(channelName, es.callback, electionMetrics)
 	}
 
 	logger.Warning("Waiting for leader election")
@@ -511,9 +515,10 @@ func TestLeaderElectionWithRealGossip(t *testing.T) {
 	waitForFullMembershipOrFailNow(t, secondChannelName, secondChannelGossips, len(secondChannelGossips), TIMEOUT, time.Millisecond*100)
 
 	for idx, i := range secondChannelPeerIndexes {
-		secondChannelServices[idx] = &electionService{nil, false, 0}
+		es := &electionService{nil, false, 0}
+		secondChannelServices[idx] = es
 		secondChannelServices[idx].LeaderElectionService =
-			gossips[i].newLeaderElectionComponent(secondChannelName, secondChannelServices[idx].callback, electionMetrics)
+			gossips[i].newLeaderElectionComponent(secondChannelName, es.callback, electionMetrics)
 	}
 
 	require.True(t, waitForLeaderElection(secondChannelServices, time.Second*30, time.Second*2), "One leader should be selected for chanB")
@@ -901,7 +906,7 @@ func TestInvalidInitialization(t *testing.T) {
 	go grpcServer.Serve(socket)
 	defer grpcServer.Stop()
 
-	dc := gService.deliveryFactory.Service(gService, orderers.NewConnectionSource(flogging.MustGetLogger("peer.orderers"), nil), &naiveCryptoService{}, false, nil, nil)
+	dc := gService.deliveryFactory.Service(gService, nil, false, nil, nil)
 	require.NotNil(t, dc)
 }
 
@@ -914,7 +919,7 @@ func TestChannelConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	mockSignerSerializer := &mocks.SignerSerializer{}
-	mockSignerSerializer.SerializeReturns(api.PeerIdentityType(string(orgInChannelA)), nil)
+	mockSignerSerializer.SerializeReturns(orgInChannelA, nil)
 	secAdv := peergossip.NewSecurityAdvisor(peergossip.NewDeserializersManager(mgmt.GetLocalMSP(cryptoProvider)))
 	gossipConfig, err := gossip.GlobalConfig(endpoint, nil)
 	require.NoError(t, err)

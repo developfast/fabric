@@ -10,7 +10,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"net/http"
 	_ "net/http/pprof" // This is essentially the main package for the orderer
@@ -20,19 +19,19 @@ import (
 	"syscall"
 	"time"
 
-	ab "github.com/hyperledger/fabric-protos-go/orderer"
-	"github.com/hyperledger/fabric/bccsp"
-	"github.com/hyperledger/fabric/bccsp/factory"
+	"github.com/hyperledger/fabric-lib-go/bccsp"
+	"github.com/hyperledger/fabric-lib-go/bccsp/factory"
+	"github.com/hyperledger/fabric-lib-go/common/flogging"
+	floggingmetrics "github.com/hyperledger/fabric-lib-go/common/flogging/metrics"
+	"github.com/hyperledger/fabric-lib-go/common/metrics"
+	"github.com/hyperledger/fabric-lib-go/common/metrics/disabled"
+	ab "github.com/hyperledger/fabric-protos-go-apiv2/orderer"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/crypto"
 	"github.com/hyperledger/fabric/common/fabhttp"
-	"github.com/hyperledger/fabric/common/flogging"
-	floggingmetrics "github.com/hyperledger/fabric/common/flogging/metrics"
 	"github.com/hyperledger/fabric/common/grpclogging"
 	"github.com/hyperledger/fabric/common/grpcmetrics"
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
-	"github.com/hyperledger/fabric/common/metrics"
-	"github.com/hyperledger/fabric/common/metrics/disabled"
 	"github.com/hyperledger/fabric/core/operations"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
@@ -142,7 +141,7 @@ func Main() {
 	}
 
 	if !reuseGrpcListener {
-		clusterServerConfig, clusterGRPCServer = configureClusterListener(conf, serverConfig, ioutil.ReadFile)
+		clusterServerConfig, clusterGRPCServer = configureClusterListener(conf, serverConfig, os.ReadFile)
 	}
 
 	// If we have a separate gRPC server for the cluster,
@@ -194,6 +193,7 @@ func Main() {
 	defer adminServer.Stop()
 
 	mutualTLS := serverConfig.SecOpts.UseTLS && serverConfig.SecOpts.RequireClientCert
+
 	server := NewServer(
 		manager,
 		metricsProvider,
@@ -221,7 +221,16 @@ func Main() {
 	if conf.General.Profile.Enabled {
 		go initializeProfilingService(conf)
 	}
-	ab.RegisterAtomicBroadcastServer(grpcServer.Server(), server)
+
+	clientRateLimiter, orgRateLimiter := CreateThrottlers(conf.General.Throttling)
+	throttlingWrapper := &ThrottlingAtomicBroadcast{
+		ThrottlingEnabled:     conf.General.Throttling.Rate > 0,
+		PerOrgRateLimiter:     orgRateLimiter,
+		PerClientRateLimiter:  clientRateLimiter,
+		AtomicBroadcastServer: server,
+	}
+
+	ab.RegisterAtomicBroadcastServer(grpcServer.Server(), throttlingWrapper)
 	logger.Info("Beginning to serve requests")
 	if err := grpcServer.Start(); err != nil {
 		logger.Fatalf("Atomic Broadcast gRPC server has terminated while serving requests due to: %v", err)
@@ -391,6 +400,7 @@ func initializeClusterClientConfig(conf *localconfig.TopLevel) (comm.ClientConfi
 	cc := comm.ClientConfig{
 		AsyncConnect:   true,
 		KaOpts:         comm.DefaultKeepaliveOptions,
+		BaOpts:         comm.BackoffOptions{},
 		DialTimeout:    conf.General.Cluster.DialTimeout,
 		SecOpts:        comm.SecureOptions{},
 		MaxRecvMsgSize: int(conf.General.MaxRecvMsgSize),
@@ -409,19 +419,19 @@ func initializeClusterClientConfig(conf *localconfig.TopLevel) (comm.ClientConfi
 		keyFile = conf.General.TLS.PrivateKey
 	}
 
-	certBytes, err := ioutil.ReadFile(certFile)
+	certBytes, err := os.ReadFile(certFile)
 	if err != nil {
 		logger.Fatalf("Failed to load client TLS certificate file '%s' (%s)", certFile, err)
 	}
 
-	keyBytes, err := ioutil.ReadFile(keyFile)
+	keyBytes, err := os.ReadFile(keyFile)
 	if err != nil {
 		logger.Fatalf("Failed to load client TLS key file '%s' (%s)", keyFile, err)
 	}
 
 	var serverRootCAs [][]byte
 	for _, serverRoot := range conf.General.Cluster.RootCAs {
-		rootCACert, err := ioutil.ReadFile(serverRoot)
+		rootCACert, err := os.ReadFile(serverRoot)
 		if err != nil {
 			logger.Fatalf("Failed to load ServerRootCAs file '%s' (%s)", serverRoot, err)
 		}
@@ -443,6 +453,24 @@ func initializeClusterClientConfig(conf *localconfig.TopLevel) (comm.ClientConfi
 		UseTLS:            true,
 	}
 
+	if conf.General.Backoff.BaseDelay > 0 ||
+		conf.General.Backoff.Multiplier > 0 ||
+		conf.General.Backoff.MaxDelay > 0 {
+		cc.BaOpts = comm.DefaultBackoffOptions
+
+		if conf.General.Backoff.BaseDelay > time.Duration(0) {
+			cc.BaOpts.BaseDelay = conf.General.Backoff.BaseDelay
+		}
+
+		if conf.General.Backoff.Multiplier > 0 {
+			cc.BaOpts.Multiplier = conf.General.Backoff.Multiplier
+		}
+
+		if conf.General.Backoff.MaxDelay > time.Duration(0) {
+			cc.BaOpts.MaxDelay = conf.General.Backoff.MaxDelay
+		}
+	}
+
 	return cc, reuseGrpcListener
 }
 
@@ -457,30 +485,30 @@ func initializeServerConfig(conf *localconfig.TopLevel, metricsProvider metrics.
 	if secureOpts.UseTLS {
 		msg := "TLS"
 		// load crypto material from files
-		serverCertificate, err := ioutil.ReadFile(conf.General.TLS.Certificate)
+		serverCertificate, err := os.ReadFile(conf.General.TLS.Certificate)
 		if err != nil {
-			logger.Fatalf("Failed to load server Certificate file '%s' (%s)",
+			logger.Fatalf("Failed to load server TLS Certificate file '%s' (%s)",
 				conf.General.TLS.Certificate, err)
 		}
-		serverKey, err := ioutil.ReadFile(conf.General.TLS.PrivateKey)
+		serverKey, err := os.ReadFile(conf.General.TLS.PrivateKey)
 		if err != nil {
-			logger.Fatalf("Failed to load PrivateKey file '%s' (%s)",
+			logger.Fatalf("Failed to load TLS PrivateKey file '%s' (%s)",
 				conf.General.TLS.PrivateKey, err)
 		}
 		var serverRootCAs, clientRootCAs [][]byte
 		for _, serverRoot := range conf.General.TLS.RootCAs {
-			root, err := ioutil.ReadFile(serverRoot)
+			root, err := os.ReadFile(serverRoot)
 			if err != nil {
-				logger.Fatalf("Failed to load ServerRootCAs file '%s' (%s)",
+				logger.Fatalf("Failed to load TLS ServerRootCAs file '%s' (%s)",
 					err, serverRoot)
 			}
 			serverRootCAs = append(serverRootCAs, root)
 		}
 		if secureOpts.RequireClientCert {
 			for _, clientRoot := range conf.General.TLS.ClientRootCAs {
-				root, err := ioutil.ReadFile(clientRoot)
+				root, err := os.ReadFile(clientRoot)
 				if err != nil {
-					logger.Fatalf("Failed to load ClientRootCAs file '%s' (%s)",
+					logger.Fatalf("Failed to load TLS ClientRootCAs file '%s' (%s)",
 						err, clientRoot)
 				}
 				clientRootCAs = append(clientRootCAs, root)

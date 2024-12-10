@@ -5,7 +5,6 @@ package server
 
 import (
 	"fmt"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
@@ -17,18 +16,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hyperledger/fabric-protos-go/common"
-	"github.com/hyperledger/fabric/bccsp"
-	"github.com/hyperledger/fabric/bccsp/factory"
-	"github.com/hyperledger/fabric/bccsp/sw"
+	"github.com/hyperledger/fabric-lib-go/bccsp"
+	"github.com/hyperledger/fabric-lib-go/bccsp/factory"
+	"github.com/hyperledger/fabric-lib-go/bccsp/sw"
+	"github.com/hyperledger/fabric-lib-go/common/flogging"
+	"github.com/hyperledger/fabric-lib-go/common/flogging/floggingtest"
+	"github.com/hyperledger/fabric-lib-go/common/metrics/disabled"
+	"github.com/hyperledger/fabric-lib-go/common/metrics/prometheus"
+	"github.com/hyperledger/fabric-protos-go-apiv2/common"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/crypto/tlsgen"
-	"github.com/hyperledger/fabric/common/flogging"
-	"github.com/hyperledger/fabric/common/flogging/floggingtest"
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
 	"github.com/hyperledger/fabric/common/ledger/blockledger/fileledger"
-	"github.com/hyperledger/fabric/common/metrics/disabled"
-	"github.com/hyperledger/fabric/common/metrics/prometheus"
 	"github.com/hyperledger/fabric/core/config/configtest"
 	"github.com/hyperledger/fabric/internal/configtxgen/encoder"
 	"github.com/hyperledger/fabric/internal/configtxgen/genesisconfig"
@@ -75,11 +74,11 @@ func TestMain(m *testing.M) {
 
 func copyYamlFiles(src, dst string) {
 	for _, file := range []string{"configtx.yaml", "examplecom-config.yaml", "orderer.yaml"} {
-		fileBytes, err := ioutil.ReadFile(filepath.Join(src, file))
+		fileBytes, err := os.ReadFile(filepath.Join(src, file))
 		if err != nil {
 			os.Exit(-1)
 		}
-		err = ioutil.WriteFile(filepath.Join(dst, file), fileBytes, 0o644)
+		err = os.WriteFile(filepath.Join(dst, file), fileBytes, 0o644)
 		if err != nil {
 			os.Exit(-1)
 		}
@@ -135,7 +134,7 @@ func TestInitializeServerConfig(t *testing.T) {
 		},
 	}
 	sc := initializeServerConfig(conf, nil)
-	expectedContent, _ := ioutil.ReadFile("main.go")
+	expectedContent, _ := os.ReadFile("main.go")
 	require.Equal(t, expectedContent, sc.SecOpts.Certificate)
 	require.Equal(t, expectedContent, sc.SecOpts.Key)
 	require.Equal(t, [][]byte{expectedContent}, sc.SecOpts.ServerRootCAs)
@@ -192,7 +191,7 @@ func TestInitializeServerConfig(t *testing.T) {
 			privateKey:     goodFile,
 			rootCA:         goodFile,
 			clientRootCert: goodFile,
-			expectedPanic:  "Failed to load server Certificate file 'does_not_exist' (open does_not_exist: no such file or directory)",
+			expectedPanic:  "Failed to load server TLS Certificate file 'does_not_exist' (open does_not_exist: no such file or directory)",
 		},
 		{
 			name:           "BadPrivateKey",
@@ -200,7 +199,7 @@ func TestInitializeServerConfig(t *testing.T) {
 			privateKey:     badFile,
 			rootCA:         goodFile,
 			clientRootCert: goodFile,
-			expectedPanic:  "Failed to load PrivateKey file 'does_not_exist' (open does_not_exist: no such file or directory)",
+			expectedPanic:  "Failed to load TLS PrivateKey file 'does_not_exist' (open does_not_exist: no such file or directory)",
 		},
 		{
 			name:           "BadRootCA",
@@ -208,7 +207,7 @@ func TestInitializeServerConfig(t *testing.T) {
 			privateKey:     goodFile,
 			rootCA:         badFile,
 			clientRootCert: goodFile,
-			expectedPanic:  "Failed to load ServerRootCAs file 'open does_not_exist: no such file or directory' (does_not_exist)",
+			expectedPanic:  "Failed to load TLS ServerRootCAs file 'open does_not_exist: no such file or directory' (does_not_exist)",
 		},
 		{
 			name:           "BadClientRootCertificate",
@@ -216,7 +215,7 @@ func TestInitializeServerConfig(t *testing.T) {
 			privateKey:     goodFile,
 			rootCA:         goodFile,
 			clientRootCert: badFile,
-			expectedPanic:  "Failed to load ClientRootCAs file 'open does_not_exist: no such file or directory' (does_not_exist)",
+			expectedPanic:  "Failed to load TLS ClientRootCAs file 'open does_not_exist: no such file or directory' (does_not_exist)",
 		},
 		{
 			name:           "BadCertificate - cluster reuses server config",
@@ -360,7 +359,7 @@ func TestVerifyNoSystemChannelJoinBlock(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, fileRepo)
 
-		genesisBytes, err = ioutil.ReadFile(genesisFile)
+		genesisBytes, err = os.ReadFile(genesisFile)
 		require.NoError(t, err)
 		require.NotNil(t, genesisBytes)
 	}
@@ -410,6 +409,7 @@ func TestVerifyNoSystemChannel(t *testing.T) {
 	// skipping app channel
 	conf := genesisconfig.Load(genesisconfig.SampleInsecureSoloProfile, configtest.GetDevConfigDir())
 	conf.Consortiums = nil
+	conf.Capabilities = map[string]bool{"V2_0": true}
 	configBlock := encoder.New(conf).GenesisBlock()
 	rl, err := rlf.GetOrCreate("appchannelid")
 	require.NoError(t, err)
@@ -419,6 +419,7 @@ func TestVerifyNoSystemChannel(t *testing.T) {
 
 	// detecting system channel genesis and panicking
 	conf = genesisconfig.Load(genesisconfig.SampleInsecureSoloProfile, configtest.GetDevConfigDir())
+	conf.Capabilities = map[string]bool{"V2_0": true}
 	configBlock = encoder.New(conf).GenesisBlock()
 	rl, err = rlf.GetOrCreate("testchannelid")
 	require.NoError(t, err)
@@ -969,8 +970,11 @@ func panicMsg(f func()) string {
 // produces a system channel genesis file to make sure the server detects it and refuses to start
 func produceGenesisFileEtcdRaft(t *testing.T, channelID string, tmpDir string) (string, []byte) {
 	confRaft := genesisconfig.Load("SampleEtcdRaftSystemChannel", tmpDir)
+	confRaft.Orderer.Addresses = []string{}
+	confRaft.Orderer.Organizations[0].OrdererEndpoints = []string{"127.0.0.1:7050"}
+	confRaft.Capabilities = map[string]bool{"V3_0": true}
 
-	serverCert, err := ioutil.ReadFile(string(confRaft.Orderer.EtcdRaft.Consenters[0].ServerTlsCert))
+	serverCert, err := os.ReadFile(string(confRaft.Orderer.EtcdRaft.Consenters[0].ServerTlsCert))
 	require.NoError(t, err)
 
 	bootstrapper, err := encoder.NewBootstrapper(confRaft)
@@ -985,8 +989,11 @@ func produceGenesisFileEtcdRaft(t *testing.T, channelID string, tmpDir string) (
 
 func produceGenesisFileEtcdRaftAppChannel(t *testing.T, channelID string, tmpDir string) (string, []byte) {
 	confRaft := genesisconfig.Load("SampleOrgChannel", tmpDir)
+	confRaft.Orderer.Addresses = []string{}
+	confRaft.Orderer.Organizations[0].OrdererEndpoints = []string{"127.0.0.1:7050"}
+	confRaft.Capabilities = map[string]bool{"V3_0": true}
 
-	serverCert, err := ioutil.ReadFile(string(confRaft.Orderer.EtcdRaft.Consenters[0].ServerTlsCert))
+	serverCert, err := os.ReadFile(string(confRaft.Orderer.EtcdRaft.Consenters[0].ServerTlsCert))
 	require.NoError(t, err)
 
 	bootstrapper, err := encoder.NewBootstrapper(confRaft)
